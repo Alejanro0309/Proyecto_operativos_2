@@ -14,7 +14,6 @@ public enum BlockReason {
     BUFFER_FULL,
     BUFFER_EMPTY,
     NETWORK_LATENCY,
-    IO_WAIT
-    /*TODO: Revisar si se agregara un motivo 
-    bloqueo de proceso en cola adicional es esos (@author SebMarval).*/
+    IO_WAIT,        // E/S por DMA: espera una cantidad fija de ciclos
+    DISK_IO         // espera en la cola del disco: sin temporizador, lo despierta el disco al terminar
 }
