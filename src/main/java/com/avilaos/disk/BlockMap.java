@@ -142,6 +142,39 @@ public class BlockMap {
             lock.release();
         }
     }
+    
+    // ---------------------------------------------------------------- actualizar
+
+    // Cambia el dueño registrado en toda la cadena que empieza en 'startBlock', sin mover ni
+    // liberar los bloques. Lo usa FileSystem cuando se renombra un archivo o un directorio padre.
+    public void relabel(int startBlock, String newOwner) {
+        if (startBlock < 0 || startBlock >= blocks.length) {
+            throw new IllegalArgumentException("El bloque " + startBlock + " no existe");
+        }
+        if (newOwner == null || newOwner.trim().isEmpty()) {
+            throw new IllegalArgumentException("El dueño del bloque no puede estar vacío");
+        }
+        lock.acquireUninterruptibly();
+        try {
+            if (blocks[startBlock].isFree()) {
+                throw new IllegalArgumentException("El bloque " + startBlock + " está libre; no se puede rotular");
+            }
+            int visited = 0;
+            int current = startBlock;
+            while (current != -1 && visited <= blocks.length) {
+                BlockOwnerType type = blocks[current].getOwnerType();
+                int next = blocks[current].getNext();
+                blocks[current].assign(type, newOwner);
+                if (next != -1) {
+                    blocks[current].setNext(next);
+                }
+                visited++;
+                current = next;
+            }
+        } finally {
+            lock.release();
+        }
+    }
 
     // ---------------------------------------------------------------- consultas
 
