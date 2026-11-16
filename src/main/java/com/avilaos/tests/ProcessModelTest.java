@@ -8,6 +8,9 @@ import com.avilaos.enums.BlockReason;
 import com.avilaos.enums.ProcessState;
 import com.avilaos.enums.ProcessType;
 import com.avilaos.model.ProcessControlBlock;
+import com.avilaos.enums.FilePermission;
+import com.avilaos.enums.FileType;
+import com.avilaos.enums.IoOperation;
 
 /**
  * Prueba manual del modelo de procesos (PCB/TCB).
@@ -26,6 +29,7 @@ public class ProcessModelTest {
         testDeadlineTicksInAnyState();
         testIOBound();
         testValidation();
+        testFileIoProcess();
         System.out.println("--------------------------------");
         System.out.println("Pruebas OK: " + passed + " | Fallidas: " + failed);
     }
@@ -129,6 +133,55 @@ public class ProcessModelTest {
         return new ProcessControlBlock("cpu", 0, ProcessType.CPU_BOUND, 1, 10, 100, instructions);
     }
 
+        /** Proceso de E/S de archivos (Proyecto 2): datos del PCB y validaciones. */
+    private static void testFileIoProcess() {
+        ProcessControlBlock r = ProcessControlBlock.createFileIoProcess("Proc_95", 0, 1, 16, 500, 2,
+                IoOperation.READ, "/sistema/config.sys");
+        check("FILE_IO: tipo, operación y ruta en el PCB", r.getType() == ProcessType.FILE_IO
+                && r.getIoOperation() == IoOperation.READ && r.getTargetPath().equals("/sistema/config.sys"));
+        check("FILE_IO: dueño por defecto es admin", r.getOwner().equals("admin"));
+        check("FILE_IO: la primera instrucción pide el disco", r.needsDiskRequest());
+        check("CPU_BOUND nunca pide el disco", !newCpuProcess(5).needsDiskRequest());
+
+        r.setState(ProcessState.READY);
+        r.setState(ProcessState.RUNNING);
+        r.executeInstruction();
+        check("FILE_IO: tras la primera instrucción ya no pide el disco", !r.needsDiskRequest());
+
+        ProcessControlBlock u = ProcessControlBlock.createFileIoProcess("Ren", 0, 1, 16, 500, 2,
+                IoOperation.UPDATE, "/usuarios/notas.txt");
+        u.setNewName("notas_v2.txt");
+        check("UPDATE guarda el nombre nuevo", u.getNewName().equals("notas_v2.txt"));
+        check("UPDATE rechaza un nombre con /", throwsIAE(() -> u.setNewName("a/b")));
+        check("UPDATE rechaza un nombre vacío", throwsIAE(() -> u.setNewName("  ")));
+
+        ProcessControlBlock c = ProcessControlBlock.createFileIoProcess("Crea", 0, 1, 16, 500, 2,
+                IoOperation.CREATE, "/usuarios/nuevo.txt");
+        c.setCreateSpec(FileType.FILE, 5, FilePermission.PRIVATE);
+        check("CREATE guarda tipo, bloques y permiso", c.getCreateType() == FileType.FILE
+                && c.getCreateBlocks() == 5 && c.getCreatePermission() == FilePermission.PRIVATE);
+        check("CREATE de archivo con 0 bloques se rechaza",
+                throwsIAE(() -> c.setCreateSpec(FileType.FILE, 0, FilePermission.PUBLIC)));
+        c.setCreateSpec(FileType.DIRECTORY, 7, FilePermission.PUBLIC);
+        check("CREATE de directorio ignora los bloques", c.getCreateBlocks() == 0);
+
+        check("setNewName en un READ es un error", throwsISE(() -> r.setNewName("x")));
+        check("operación SUSPEND no es válida para un proceso de archivos", throwsIAE(() ->
+                ProcessControlBlock.createFileIoProcess("S", 0, 1, 16, 500, 2, IoOperation.SUSPEND, "/a")));
+        check("ruta sin / inicial se rechaza", throwsIAE(() ->
+                ProcessControlBlock.createFileIoProcess("S", 0, 1, 16, 500, 2, IoOperation.READ, "a.txt")));
+        check("dueño vacío se rechaza", throwsIAE(() -> r.setOwner(" ")));
+    }
+
+    private static boolean throwsISE(Runnable action) {
+        try {
+            action.run();
+            return false;
+        } catch (IllegalStateException e) {
+            return true;
+        }
+    }
+    
     private static boolean throwsIAE(Runnable action) {
         try {
             action.run();
