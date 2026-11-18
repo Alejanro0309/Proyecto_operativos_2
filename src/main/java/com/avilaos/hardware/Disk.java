@@ -92,6 +92,26 @@ public class Disk implements ClockListener, DiskPort {
         }
     }
 
+    @Override
+    public boolean cancelRequest(int processId) {
+        lock.acquireUninterruptibly();
+        try {
+            return removeByProcess(arrivals, processId) || removeByProcess(queue, processId);
+        } finally {
+            lock.release();
+        }
+    }
+
+    private static boolean removeByProcess(CustomLinkedList<DiskRequest> list, int processId) {
+        for (int i = 0; i < list.getSize(); i++) {
+            if (list.get(i).getProcessId() == processId) {
+                list.removeAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Cambia la política en ejecución. Vale desde la próxima selección: la solicitud en curso no se toca.
     public void setPolicy(DiskPolicy newPolicy) {
         DiskSchedulingAlgorithm newScheduler = DiskSchedulerFactory.create(newPolicy);
