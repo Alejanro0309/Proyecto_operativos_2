@@ -6,7 +6,9 @@ package com.avilaos.system;
 
 import com.avilaos.datastructures.CustomLinkedList;
 import com.avilaos.enums.SchedulingPolicy;
+import com.avilaos.filesystem.FileSystem;
 import com.avilaos.hardware.ClockListener;
+import com.avilaos.hardware.Disk;
 import com.avilaos.hardware.GlobalClock;
 import com.avilaos.kernel.EventLogger;
 import com.avilaos.kernel.Kernel;
@@ -40,6 +42,10 @@ public final class Cluster {
     private final Semaphore buffersLock = new Semaphore(1);   // la GUI puede crear buffers en ejecución
     private int networkLatency;
 
+    // Proyecto 2: el disco y el sistema de archivos (null en el clúster del Proyecto 1)
+    private final Disk disk;
+    private final FileSystem fileSystem;
+
     /**
      * @param ramCapacities   RAM de cada computador (su longitud = cantidad de computadores)
      * @param policy          política inicial de todos los computadores
@@ -59,7 +65,51 @@ public final class Cluster {
             computers[i].getKernel().setWakeUpRouter(this::routeWakeUp);
         }
         setNetworkLatency(networkLatency);
+        this.disk = null;
+        this.fileSystem = null;
         this.clock = new GlobalClock(computers, cycleDurationMs);
+    }
+
+    /**
+     * Sistema del Proyecto 2: UN computador y un disco con su sistema de archivos.
+     *
+     * El reloj tiene dos componentes, cada uno en su hilo: el computador y el
+     * disco. Ninguno empieza el ciclo k+1 hasta que los dos terminaron el k.
+     * El kernel le pide trabajo al disco por su puerto (DiskPort) y el disco
+     * le avisa al kernel cuando termina (DiskCompletionListener).
+     *
+     * @param ramCapacity     RAM del computador
+     * @param policy          política inicial de planificación de CPU
+     * @param quantum         quantum inicial (Round Robin)
+     * @param cycleDurationMs duración del ciclo del reloj en milisegundos
+     * @param disk            el disco, con su política y su cabezal
+     * @param fileSystem      el sistema de archivos que vive en ese disco
+     */
+    public Cluster(int ramCapacity, SchedulingPolicy policy, int quantum, int cycleDurationMs,
+            Disk disk, FileSystem fileSystem, EventLogger logger) {
+        if (disk == null || fileSystem == null) {
+            throw new IllegalArgumentException("El sistema necesita un disco y un sistema de archivos");
+        }
+        this.logger = (logger == null) ? EventLogger.SILENT : logger;
+        this.computers = new Computer[]{new Computer(0, ramCapacity, policy, quantum, this.logger)};
+        Kernel kernel = computers[0].getKernel();
+        kernel.setWakeUpRouter(this::routeWakeUp);
+        kernel.attachDisk(disk, fileSystem);
+        disk.setCompletionListener(kernel);
+        setNetworkLatency(0);
+        this.disk = disk;
+        this.fileSystem = fileSystem;
+        this.clock = new GlobalClock(new ClockListener[]{computers[0], disk}, cycleDurationMs);
+    }
+
+    /** El disco, o null en el clúster del Proyecto 1. */
+    public Disk getDisk() {
+        return disk;
+    }
+
+    /** El sistema de archivos, o null en el clúster del Proyecto 1. */
+    public FileSystem getFileSystem() {
+        return fileSystem;
     }
 
     // ================================================================ red

@@ -47,7 +47,8 @@ public final class GlobalClock implements Runnable {
         setCycleDurationMs(cycleDurationMs);
         this.workers = new ClockWorker[components.length];
         for (int i = 0; i < components.length; i++) {
-            workers[i] = new ClockWorker(components[i], tickDone, "Computer-" + i);
+             String name = (components[i] instanceof Disk) ? "Disk" : "Computer-" + i;
+            workers[i] = new ClockWorker(components[i], tickDone, name);
         }
         this.clockThread = new Thread(this, "GlobalClock");
         this.clockThread.setDaemon(true);
