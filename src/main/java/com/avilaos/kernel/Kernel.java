@@ -2,16 +2,27 @@
  * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
  * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
  */
+/*
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
+ */
 package com.avilaos.kernel;
 
 import com.avilaos.datastructures.CustomLinkedList;
+import com.avilaos.disk.DiskCompletionListener;
+import com.avilaos.disk.DiskPort;
+import com.avilaos.disk.DiskRequest;
 import com.avilaos.datastructures.CustomQueue;
 import com.avilaos.enums.BlockReason;
+import com.avilaos.enums.FileType;
+import com.avilaos.enums.IoOperation;
 import com.avilaos.enums.MicroInstruction;
 import com.avilaos.enums.ProcessState;
 import com.avilaos.enums.ProcessType;
 import com.avilaos.enums.SchedulingPolicy;
 import com.avilaos.enums.SemaphoreType;
+import com.avilaos.enums.UserMode;
+import com.avilaos.filesystem.FileSystem;
 import com.avilaos.hardware.CPU;
 import com.avilaos.hardware.IODevice;
 import com.avilaos.hardware.RAM;
@@ -43,7 +54,7 @@ import java.util.concurrent.Semaphore;
  * @author SebMarval
  * @author aleja
  */
-public class Kernel {
+public class Kernel implements DiskCompletionListener {
 
     private final int computerId;
     private final RAM ram;
@@ -62,6 +73,11 @@ public class Kernel {
     private final CustomQueue<PendingWakeUp> wakeUpMailbox = new CustomQueue<>();
     private final Semaphore mailboxLock = new Semaphore(1);
     private WakeUpRouter wakeUpRouter;
+
+    // Proyecto 2: disco y sistema de archivos (null en las pruebas del Proyecto 1)
+    private DiskPort diskPort;
+    private FileSystem fileSystem;
+    private final CustomQueue<PendingDiskDone> diskMailbox = new CustomQueue<>();   // protegido por mailboxLock
 
     private volatile int networkLatency;   // ciclos que bloquea cada acceso a un buffer remoto
 
@@ -149,6 +165,7 @@ public class Kernel {
         try {
             currentCycle = cycle;
             processWakeUps();           // 0. despertares por semSignal (del ciclo anterior)
+            processDiskCompletions();   // 0b. solicitudes que el disco terminó en el ciclo anterior
             tickDevices();              // 1. DMA (E/S) y red (latencia)
             admitNewProcesses();        // 2. largo plazo
             scheduleIfNeeded();         // 3. corto plazo
@@ -204,6 +221,85 @@ public class Kernel {
 
     /** Un despertar pendiente y el ciclo en que se produjo el semSignal. */
     private record PendingWakeUp(ProcessControlBlock process, int cycle) { }
+
+    // ================================================================ disco (Proyecto 2)
+
+    /** Conecta el disco y el sistema de archivos. El kernel no conoce la clase Disk: solo su puerto. */
+    public void attachDisk(DiskPort port, FileSystem fs) {
+        if (port == null || fs == null) {
+            throw new IllegalArgumentException("El disco y el sistema de archivos son obligatorios");
+        }
+        this.diskPort = port;
+        this.fileSystem = fs;
+    }
+
+    /**
+     * El disco terminó una solicitud. Lo llama el HILO DEL DISCO: aquí no se toca
+     * ninguna cola del kernel, solo se deja el aviso en un buzón. El kernel lo
+     * procesa en el paso 0 del ciclo SIGUIENTE (mismo criterio determinista que
+     * los despertares del Proyecto 1).
+     */
+    @Override
+    public void onRequestCompleted(DiskRequest request, int cycle) {
+        mailboxLock.acquireUninterruptibly();
+        try {
+            diskMailbox.enqueue(new PendingDiskDone(request.getProcessId(), cycle));
+        } finally {
+            mailboxLock.release();
+        }
+    }
+
+    /** Una solicitud que el disco terminó y el ciclo en que terminó. */
+    private record PendingDiskDone(int processId, int cycle) { }
+
+    // 0b ----------------------------------------------------------------
+    /**
+     * Cada solicitud terminada: se aplica el cambio en el sistema de archivos y
+     * el proceso vuelve a READY (o termina, si ya no le quedan instrucciones).
+     * Si el cambio ya no se puede aplicar (p. ej. el archivo se borró mientras
+     * esperaba), el proceso termina y el motivo queda en el log. Si el proceso
+     * ya no está bloqueado (venció su deadline), el aviso se descarta.
+     */
+    private void processDiskCompletions() {
+        mailboxLock.acquireUninterruptibly();
+        try {
+            int pending = diskMailbox.size();
+            for (int k = 0; k < pending; k++) {
+                PendingDiskDone done = diskMailbox.dequeue();
+                if (done.cycle() >= currentCycle) {
+                    diskMailbox.enqueue(done);      // terminó en este mismo ciclo: espera al siguiente
+                    continue;
+                }
+                ProcessControlBlock p = removeBlockedById(done.processId(), BlockReason.DISK_IO);
+                if (p == null) {
+                    continue;
+                }
+                String error = applyFileOperation(p);
+                if (error != null) {
+                    terminate(p, true, p.getIoOperation() + " " + p.getTargetPath() + " rechazada: " + error);
+                } else if (p.isFinished()) {
+                    terminate(p, true, "completó " + p.getIoOperation() + " " + p.getTargetPath());
+                } else {
+                    p.setState(ProcessState.READY);
+                    readyQueue.add(p);
+                    logger.log(currentCycle, computerId, "P" + p.getId() + " completó " + p.getIoOperation()
+                            + " " + p.getTargetPath() + " en el disco -> READY");
+                }
+            }
+        } finally {
+            mailboxLock.release();
+        }
+    }
+
+    private ProcessControlBlock removeBlockedById(int processId, BlockReason reason) {
+        for (int i = 0; i < blockedList.getSize(); i++) {
+            ProcessControlBlock p = blockedList.get(i);
+            if (p.getId() == processId && p.getBlockReason() == reason) {
+                return blockedList.removeAt(i);
+            }
+        }
+        return null;
+    }
 
     // 1 -----------------------------------------------------------------
     /**
@@ -275,6 +371,11 @@ public class Kernel {
             cpu.onTick(currentCycle);           // ciclo ocioso
             return;
         }
+        if (running.needsDiskRequest()) {
+            cpu.executeKernelInstruction();     // la solicitud al disco es 1 instrucción en modo SO
+            requestDisk(running);
+            return;
+        }
         MicroInstruction instruction = running.currentInstruction();
         if (!instruction.isSystemCall()) {
             cpu.onTick(currentCycle);           // instrucción de usuario
@@ -342,18 +443,114 @@ public class Kernel {
         }
     }
 
+    // ---------------------------------------------------------------- E/S de archivos
+
+    /**
+     * El proceso de E/S genera su solicitud: primero se comprueban permisos y
+     * estado (si falla, el proceso termina sin llegar al disco); si todo está
+     * bien, la solicitud entra a la cola del disco y el proceso queda BLOCKED
+     * por DISK_IO hasta que el disco la atienda.
+     */
+    private void requestDisk(ProcessControlBlock p) {
+        String error = (diskPort == null) ? "no hay disco conectado" : checkFileOperation(p);
+        if (error != null) {
+            cpu.release();
+            terminate(p, true, p.getIoOperation() + " " + p.getTargetPath() + " rechazada: " + error);
+            return;
+        }
+        int block = requestBlock(p);
+        int count = requestBlockCount(p);
+        diskPort.submitRequest(new DiskRequest(block, p.getIoOperation(), p.getId(), currentCycle, count));
+        p.block(BlockReason.DISK_IO);           // sale de la CPU en el paso 5
+        logger.log(currentCycle, computerId, "P" + p.getId() + " solicita " + p.getIoOperation() + " "
+                + p.getTargetPath() + " al disco (bloque " + block + ", " + count + " bloque(s)) -> BLOCKED DISK_IO");
+    }
+
+    /** Los procesos de admin tienen todos los permisos; los demás, los de modo usuario. */
+    private static UserMode modeOf(ProcessControlBlock p) {
+        return "admin".equals(p.getOwner()) ? UserMode.ADMINISTRATOR : UserMode.USER;
+    }
+
+    private String checkFileOperation(ProcessControlBlock p) {
+        UserMode mode = modeOf(p);
+        String path = p.getTargetPath();
+        return switch (p.getIoOperation()) {
+            case CREATE -> p.getCreateType() == null ? "falta indicar qué se crea"
+                    : fileSystem.checkCreate(path, p.getCreateType(), p.getCreateBlocks(), mode, p.getOwner());
+            case READ -> fileSystem.checkRead(path, mode, p.getOwner());
+            case UPDATE -> fileSystem.checkUpdate(path, p.getNewName(), mode, p.getOwner());
+            case DELETE -> fileSystem.checkDelete(path, mode, p.getOwner());
+            default -> "operación no válida para un proceso de archivos";
+        };
+    }
+
+    /**
+     * Posición del cabezal que necesita la solicitud. Un archivo existente: su
+     * primer bloque. CREATE de archivo: el primer bloque libre, donde empezará.
+     * Los directorios no tienen bloques: sus metadatos se toman en el bloque 0.
+     */
+    private int requestBlock(ProcessControlBlock p) {
+        if (p.getIoOperation() == IoOperation.CREATE) {
+            return p.getCreateType() == FileType.FILE ? Math.max(0, fileSystem.firstFreeBlock()) : 0;
+        }
+        FileSystem.EntryInfo info = fileSystem.info(p.getTargetPath());
+        return (info == null || info.startBlock() < 0) ? 0 : info.startBlock();
+    }
+
+    /** READ transfiere todo el archivo; CREATE escribe sus bloques; UPDATE y DELETE solo metadatos (1). */
+    private int requestBlockCount(ProcessControlBlock p) {
+        if (p.getIoOperation() == IoOperation.CREATE) {
+            return Math.max(1, p.getCreateBlocks());
+        }
+        if (p.getIoOperation() == IoOperation.READ) {
+            FileSystem.EntryInfo info = fileSystem.info(p.getTargetPath());
+            return (info == null) ? 1 : Math.max(1, info.blocks());
+        }
+        return 1;
+    }
+
+    /** Aplica el cambio cuando el disco terminó. Devuelve null o el motivo por el que ya no se pudo. */
+    private String applyFileOperation(ProcessControlBlock p) {
+        String path = p.getTargetPath();
+        String creator = "P" + p.getId();
+        try {
+            switch (p.getIoOperation()) {
+                case CREATE -> {
+                    if (p.getCreateType() == FileType.FILE) {
+                        fileSystem.createFile(path, p.getCreateBlocks(), p.getOwner(), p.getCreatePermission(), creator);
+                    } else {
+                        fileSystem.createDirectory(path, p.getOwner(), p.getCreatePermission(), creator);
+                    }
+                }
+                case READ -> {
+                    if (!fileSystem.exists(path)) {
+                        return "'" + path + "' ya no existe";
+                    }
+                }
+                case UPDATE -> fileSystem.rename(path, p.getNewName());
+                case DELETE -> fileSystem.delete(path);
+                default -> {
+                    return "operación no válida para un proceso de archivos";
+                }
+            }
+            return null;
+        } catch (IllegalArgumentException e) {
+            return e.getMessage();
+        }
+    }
+
     // 5 -----------------------------------------------------------------
     private void handleAfterExecution() {
         ProcessControlBlock running = cpu.getRunning();
         if (running == null) {
             return;
         }
-        if (running.isFinished()) {
+        if (running.getState() == ProcessState.BLOCKED) {
+            cpu.release();                       // se bloqueó en un semáforo, espera la red o el disco
+            blockedList.add(running);            // (primero: un proceso de E/S de 1 instrucción espera al disco)
+        } else if (running.isFinished()) {
             cpu.release();
             terminate(running, true, "terminó sus instrucciones");
-        } else if (running.getState() == ProcessState.BLOCKED) {
-            cpu.release();                       // se bloqueó en un semáforo o espera la red
-            blockedList.add(running);
         } else if (running.needsIO()) {
             cpu.release();
             dma.startService(running, running.getIoDurationCycles());
@@ -405,6 +602,9 @@ public class Kernel {
         deadlineMissedCount++;
         dma.cancel(p);                 // si moría esperando un dispositivo, se retira de él
         network.cancel(p);
+        if (p.getBlockReason() == BlockReason.DISK_IO && diskPort != null) {
+            diskPort.cancelRequest(p.getId());   // su solicitud sale de la cola del disco
+        }
         releaseSyncResources(p);
         terminate(p, holdsMemory, "deadline vencido");
     }
