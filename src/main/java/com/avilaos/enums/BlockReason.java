@@ -14,7 +14,8 @@ public enum BlockReason {
     BUFFER_FULL,
     BUFFER_EMPTY,
     NETWORK_LATENCY,
-    IO_WAIT
+    IO_WAIT,
+    DISK_IO
     /*TODO: Revisar si se agregara un motivo 
     bloqueo de proceso en cola adicional es esos (@author SebMarval).*/
 }
