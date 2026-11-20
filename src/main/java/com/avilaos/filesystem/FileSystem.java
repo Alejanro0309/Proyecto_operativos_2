@@ -41,6 +41,10 @@ public class FileSystem {
         this.blockMap = blockMap;
     }
 
+    // El mapa de bloques del disco: el planificador a mediano plazo lo usa para el área de swap.
+    public BlockMap getBlockMap() {
+        return blockMap;
+    }
     // ================================================================ comprobar permisos y estado
 
     // Crear un archivo o directorio. 'blocks' solo cuenta si type es FILE.
