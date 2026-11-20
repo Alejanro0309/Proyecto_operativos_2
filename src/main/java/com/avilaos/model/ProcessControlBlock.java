@@ -417,12 +417,17 @@ public class ProcessControlBlock {
     public void setState(ProcessState state) {
         this.state = state;
         this.tcb.setState(state);
-        if (state != ProcessState.BLOCKED) {
+        // un bloqueado que se suspende conserva su motivo: sigue esperando el mismo evento
+        if (state != ProcessState.BLOCKED && state != ProcessState.BLOCKED_SUSPENDED) {
             this.blockReason = BlockReason.NONE;
             this.blockTimer = 0;
         }
     }
 
+     public boolean isSuspended() {
+        return state == ProcessState.READY_SUSPENDED || state == ProcessState.BLOCKED_SUSPENDED;
+    }
+     
     /** Bloqueo sin temporizador (semáforos). */
     public void block(BlockReason reason) {
         setState(ProcessState.BLOCKED);
