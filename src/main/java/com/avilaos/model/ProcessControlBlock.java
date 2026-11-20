@@ -66,6 +66,8 @@ public class ProcessControlBlock {
     private FilePermission createPermission = FilePermission.PUBLIC;
     // ------------------------------------------------ bloqueo temporizado
     private int blockTimer;            // ciclos que faltan para desbloquearse (E/S o latencia)
+    private int swapStartBlock = -1;    // primer bloque de su imagen en el swap (-1 = no está en swap)
+    private IoOperation swapInProgress; // SUSPEND (escribiéndose) o REACTIVATE (leyéndose); null si nada
 
     // ------------------------------------------------ métricas
     private int arrivalCycle = -1;
@@ -264,7 +266,24 @@ public class ProcessControlBlock {
     public FileType getCreateType() { return createType; }
     public int getCreateBlocks() { return createBlocks; }
     public FilePermission getCreatePermission() { return createPermission; }
-    // ================================================================ E/S
+    
+    // ================================================================ intercambio (swap)
+
+    /** Lo usa el planificador a mediano plazo: dónde quedó su imagen en el swap. */
+    public void setSwapStartBlock(int block) { this.swapStartBlock = block; }
+
+    /** Lo usa el planificador a mediano plazo: SUSPEND o REACTIVATE mientras el disco transfiere; null al terminar. */
+    public void setSwapInProgress(IoOperation operation) {
+        if (operation != null && operation != IoOperation.SUSPEND && operation != IoOperation.REACTIVATE) {
+            throw new IllegalArgumentException("Solo SUSPEND o REACTIVATE son transferencias de swap");
+        }
+        this.swapInProgress = operation;
+    }
+
+    public int getSwapStartBlock() { return swapStartBlock; }
+    public IoOperation getSwapInProgress() { return swapInProgress; }
+
+// ================================================================ E/S
 
     /** Configura la E/S de un proceso IO_BOUND (decisión D4). */
     public void configureIO(int everyCycles, int durationCycles) {
