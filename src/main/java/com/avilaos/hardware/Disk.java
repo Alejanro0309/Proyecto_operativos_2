@@ -10,6 +10,7 @@ import com.avilaos.disk.DiskStatus;
 import com.avilaos.enums.DiskPolicy;
 import com.avilaos.enums.HeadDirection;
 import java.util.concurrent.Semaphore;
+import com.avilaos.kernel.EventLogger;
 
 // Disco: un componente de hardware que obedece al reloj (ClockListener). En cada ciclo avanza
 // exactamente un ciclo de trabajo, y atiende UNA solicitud a la vez.
@@ -52,9 +53,10 @@ public class Disk implements ClockListener, DiskPort {
     private long totalWait;
     private int busyCycles;
     private int idleCycles;
+    private volatile DiskCompletionListener completionListener;
+    private volatile EventLogger logger = EventLogger.SILENT;
     private final int[] servedPerPolicy = new int[DiskPolicy.values().length];
 
-    private volatile DiskCompletionListener completionListener;
 
     public Disk(int totalBlocks, int initialHead, int headSpeed, DiskPolicy initialPolicy) {
         if (totalBlocks <= 0) {
@@ -110,6 +112,9 @@ public class Disk implements ClockListener, DiskPort {
             }
         }
         return false;
+    }
+    public void setLogger(EventLogger logger) {
+    this.logger = (logger == null) ? EventLogger.SILENT : logger;
     }
 
     // Cambia la política en ejecución. Vale desde la próxima selección: la solicitud en curso no se toca.
@@ -181,7 +186,11 @@ public class Disk implements ClockListener, DiskPort {
             head = seekTo;
             direction = directionAfterSeek;
         }
+        // 4. Registra el evento en el log global:
+        logger.log(cycle, 0, "El disco atiende la solicitud de P" + current.getProcessId()
+                + " en el bloque " + current.getBlock() + " (" + policy + ")");
     }
+
 
     // Un ciclo de trabajo sobre la solicitud en curso. Devuelve la solicitud si terminó.
     private DiskRequest work() {
