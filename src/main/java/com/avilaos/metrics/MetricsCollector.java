@@ -250,14 +250,18 @@ public class MetricsCollector implements ClockListener {
         Object[] b = kernel.getReadySnapshot();
         Object[] c = kernel.getBlockedSnapshot();
         Object[] d = kernel.getTerminatedSnapshot();
+        Object[] e = kernel.getReadySuspendedSnapshot();
+        Object[] f = kernel.getBlockedSuspendedSnapshot();
         ProcessControlBlock running = kernel.getCpu().getRunning();
-        int total = a.length + b.length + c.length + d.length + (running != null ? 1 : 0);
+        int total = a.length + b.length + c.length + d.length + e.length + f.length + (running != null ? 1 : 0);
         ProcessControlBlock[] all = new ProcessControlBlock[total];
         int pos = 0;
         pos = copyInto(all, pos, a);
         pos = copyInto(all, pos, b);
         pos = copyInto(all, pos, c);
         pos = copyInto(all, pos, d);
+        pos = copyInto(all, pos, e);
+        pos = copyInto(all, pos, f);
         if (running != null) {
             all[pos] = running;
         }

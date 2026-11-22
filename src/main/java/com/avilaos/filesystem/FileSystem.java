@@ -40,7 +40,22 @@ public class FileSystem {
         }
         this.blockMap = blockMap;
     }
-
+    // Registra un archivo que ya existe en el disco con una cadena explícita de bloques dispersos.
+    // Este es el método que invoca FileSystemLoader en la línea 90.
+    public void loadFileChain(String path, int[] chain, String owner, FilePermission permission, String creator) {
+        if (chain == null || chain.length == 0) {
+            throw new IllegalArgumentException("'" + path + "': la cadena de bloques no puede estar vacía");
+        }
+        lock.acquireUninterruptibly();
+        try {
+            FsNode parent = prepareParent(path, owner, permission);
+            blockMap.assignChain(BlockOwnerType.FILE, path, chain);
+            parent.addChild(new FsNode(baseName(path), FileType.FILE, owner, permission,
+                    chain[0], chain.length, creator));
+        } finally {
+            lock.release();
+        }
+    }
     // El mapa de bloques del disco: el planificador a mediano plazo lo usa para el área de swap.
     public BlockMap getBlockMap() {
         return blockMap;

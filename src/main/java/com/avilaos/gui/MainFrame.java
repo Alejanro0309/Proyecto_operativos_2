@@ -32,15 +32,22 @@ public class MainFrame extends JFrame {
     private final UtilizationChartPanel chartPanel;
     private final GlobalPanel globalPanel;
     private final Timer timer;
+    private final Runnable onBack;
 
-     public MainFrame(Cluster cluster, JTextArea logArea) {
-        this(cluster, logArea, null);
+    public MainFrame(Cluster cluster, JTextArea logArea) {
+        this(cluster, logArea, (SimulationConfig) null);
     }
-     
-    // initialConfig: la configuración con la que se inició, para "Volver a la configuración"
+
+    // initialConfig: la configuración con la que se inició en Proyecto 1, para "Volver a la configuración"
     public MainFrame(Cluster cluster, JTextArea logArea, SimulationConfig initialConfig) {
+        this(cluster, logArea, () -> new ConfigFrame(initialConfig).setVisible(true));
+    }
+
+    // onBack: acción al pulsar "Volver" (ConfigFrame en Proyecto 1, StartFrame en Proyecto 2)
+    public MainFrame(Cluster cluster, JTextArea logArea, Runnable onBack) {
         super("ÁvilaOS - Simulación");
         this.cluster = cluster;
+        this.onBack = (onBack != null) ? onBack : () -> new ConfigFrame(null).setVisible(true);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
 
         // el reloj llama al colector al final de cada ciclo, con todos los computadores quietos
@@ -79,17 +86,18 @@ public class MainFrame extends JFrame {
                 cluster.stop();
             }
         });
-        globalPanel.setOnBackToConfig(() -> backToConfig(initialConfig));
+        globalPanel.setOnBackToConfig(this::backToConfig);
         timer.start();
     }
     
     
     // Detiene todo (reloj, hilos y refresco) y vuelve a la vista de configuración
-    private void backToConfig(SimulationConfig initialConfig) {
+    // Detiene todo (reloj, hilos y refresco) y vuelve a la pantalla anterior (ConfigFrame o StartFrame)
+    private void backToConfig() {
         timer.stop();
         cluster.stop();
         dispose();
-        new ConfigFrame(initialConfig).setVisible(true);
+        onBack.run();
     }
 
     private void refresh() {
