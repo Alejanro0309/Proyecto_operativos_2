@@ -20,7 +20,8 @@ import javax.swing.border.TitledBorder;
 // Vista compacta de TODOS los computadores a la vez (una tarjeta por computador).
 // Complementa a las pestañas de detalle (ComputerPanel): aquí no están todas las columnas del PCB,
 // pero sí lo esencial de cada máquina: proceso en CPU, modo, política, RAM y el contenido de las
-// cuatro colas. Igual que el resto de la GUI: solo lee snapshots del kernel, no modifica nada.
+// seis colas (nuevos, listos, bloqueados, terminados, listo/suspendido y bloqueado/suspendido).
+// Igual que el resto de la GUI: solo lee snapshots del kernel, no modifica nada.
 public class SummaryPanel extends JPanel {
 
     private final Card[] cards;
@@ -47,15 +48,18 @@ public class SummaryPanel extends JPanel {
 
     private static class Card extends JPanel {
 
+        private static final int QUEUES = 6;
+
         private final Kernel kernel;
         private final JLabel policyLabel = new JLabel("—");
         private final JLabel cpuLabel = new JLabel("—");
         private final JLabel detailLabel = new JLabel("—");
         private final JProgressBar ramBar = new JProgressBar();
-        private final JTextArea[] areas = new JTextArea[4];
-        private final TitledBorder[] borders = new TitledBorder[4];
-        private final String[] titles = {"Nuevos", "Listos", "Bloqueados", "Terminados"};
-        private final String[] lastText = new String[4];
+        private final JTextArea[] areas = new JTextArea[QUEUES];
+        private final TitledBorder[] borders = new TitledBorder[QUEUES];
+        private final String[] titles = {"Nuevos", "Listos", "Bloqueados", "Terminados",
+            "Listo/Suspendido", "Bloqueado/Suspendido"};
+        private final String[] lastText = new String[QUEUES];
 
         Card(int id, Kernel kernel) {
             this.kernel = kernel;
@@ -73,8 +77,8 @@ public class SummaryPanel extends JPanel {
             top.add(ramBar);
             add(top, BorderLayout.NORTH);
 
-            JPanel queues = new JPanel(new GridLayout(4, 1, 4, 4));
-            for (int q = 0; q < 4; q++) {
+            JPanel queues = new JPanel(new GridLayout(QUEUES, 1, 4, 4));
+            for (int q = 0; q < QUEUES; q++) {
                 areas[q] = new JTextArea();
                 areas[q].setEditable(false);
                 borders[q] = new TitledBorder(titles[q]);
@@ -109,6 +113,8 @@ public class SummaryPanel extends JPanel {
             show(1, kernel.getReadySnapshot(), false, false);
             show(2, kernel.getBlockedSnapshot(), true, false);
             show(3, kernel.getTerminatedSnapshot(), false, true);
+            show(4, kernel.getReadySuspendedSnapshot(), false, false);
+            show(5, kernel.getBlockedSuspendedSnapshot(), true, false);
         }
 
         // Una línea por proceso. El texto solo se reemplaza si cambió: si se reescribiera siempre,

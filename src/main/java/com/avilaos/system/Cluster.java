@@ -5,7 +5,10 @@
 package com.avilaos.system;
 
 import com.avilaos.datastructures.CustomLinkedList;
+import com.avilaos.enums.IoOperation;
 import com.avilaos.enums.SchedulingPolicy;
+import com.avilaos.filesystem.FileOperation;
+import com.avilaos.filesystem.FileOperationRequester;
 import com.avilaos.filesystem.FileSystem;
 import com.avilaos.hardware.ClockListener;
 import com.avilaos.hardware.Disk;
@@ -29,9 +32,12 @@ import java.util.concurrent.Semaphore;
  * clúster lo entrega al buzón del kernel correcto (WakeUpRouter).
  * No hay migración: un proceso vive siempre en el computador donde se creó.
  *
+ * Proyecto 2: también es el FileOperationRequester: la interfaz le pide una operación
+ * sobre un archivo y el clúster crea el proceso de E/S (la interfaz nunca toca el disco).
+ *
  * @author SebMarval
  */
-public final class Cluster {
+public final class Cluster implements FileOperationRequester {
 
     public static final int MIN_COMPUTERS = 2;
 
@@ -96,6 +102,7 @@ public final class Cluster {
         kernel.setWakeUpRouter(this::routeWakeUp);
         kernel.attachDisk(disk, fileSystem);
         disk.setCompletionListener(kernel);
+        disk.setLogger(this.logger);      // las decisiones del disco salen en el log de eventos
         setNetworkLatency(0);
         this.disk = disk;
         this.fileSystem = fileSystem;
@@ -110,6 +117,41 @@ public final class Cluster {
     /** El sistema de archivos, o null en el clúster del Proyecto 1. */
     public FileSystem getFileSystem() {
         return fileSystem;
+    }
+
+    // ================================================================ operaciones de archivos (Proyecto 2)
+
+    /**
+     * La interfaz pide una operación (crear, leer, actualizar o eliminar) y aquí se crea el proceso
+     * de E/S que la realiza. El proceso pasa por las colas del computador como cualquier otro.
+     *
+     * @throws IllegalArgumentException si no hay disco o los datos de la operación no son válidos
+     */
+    @Override
+    public void requestFileOperation(FileOperation op) {
+        if (disk == null || fileSystem == null) {
+            throw new IllegalArgumentException("Este sistema no tiene disco");
+        }
+        if (op == null) {
+            throw new IllegalArgumentException("Falta la operación");
+        }
+        String path = op.path();
+        String shortName = path.substring(path.lastIndexOf('/') + 1);
+        String name = op.operation() + "_" + (shortName.isEmpty() ? "raiz" : shortName);
+        if (name.length() > 30) {
+            name = name.substring(0, 30);
+        }
+        int memory = Math.min(16, computers[0].getKernel().getRam().getCapacity());
+        ProcessControlBlock p = ProcessControlBlock.createFileIoProcess(
+                name, 0, 1, memory, 500, 2, op.operation(), path);
+        p.setOwner(op.owner());
+        if (op.operation() == IoOperation.UPDATE) {
+            p.setNewName(op.newName());
+        }
+        if (op.operation() == IoOperation.CREATE) {
+            p.setCreateSpec(op.createType(), op.createBlocks(), op.createPermission());
+        }
+        submit(p);
     }
 
     // ================================================================ red

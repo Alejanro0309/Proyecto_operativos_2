@@ -28,6 +28,8 @@ import javax.swing.table.DefaultTableModel;
 
 // Panel de UN computador. Solo lee (snapshots y getters del kernel) y manda una orden:
 // cambiar la política. No mueve procesos ni calcula nada del sistema.
+// Muestra las seis colas del modelo de siete estados: Nuevos, Listos, Bloqueados, Terminados,
+// Listo/Suspendido y Bloqueado/Suspendido (los bloqueados con el motivo del bloqueo).
 public class ComputerPanel extends JPanel {
 
     // todos los elementos del PCB que pide el enunciado (+ program counter)
@@ -73,10 +75,14 @@ public class ComputerPanel extends JPanel {
     private final DefaultTableModel readyModel = newModel(COLUMNS);
     private final DefaultTableModel blockedModel = newModel(BLOCKED_COLUMNS);
     private final DefaultTableModel terminatedModel = newModel(TERMINATED_COLUMNS);
+    private final DefaultTableModel readySuspModel = newModel(COLUMNS);
+    private final DefaultTableModel blockedSuspModel = newModel(BLOCKED_COLUMNS);
     private final TitledBorder newBorder = new TitledBorder("Nuevos");
     private final TitledBorder readyBorder = new TitledBorder("Listos");
     private final TitledBorder blockedBorder = new TitledBorder("Bloqueados");
     private final TitledBorder terminatedBorder = new TitledBorder("Terminados");
+    private final TitledBorder readySuspBorder = new TitledBorder("Listo/Suspendido");
+    private final TitledBorder blockedSuspBorder = new TitledBorder("Bloqueado/Suspendido");
 
     public ComputerPanel(Kernel kernel) {
         this.kernel = kernel;
@@ -96,7 +102,8 @@ public class ComputerPanel extends JPanel {
         north.add(buildPolicyPanel());
         add(north, BorderLayout.NORTH);
 
-        // arriba Nuevos y Listos; abajo Bloqueados (más ancha por la columna Motivo) y Terminados
+        // arriba Nuevos y Listos; en medio Bloqueados (más ancha por la columna Motivo) y Terminados;
+        // abajo los dos suspendidos
         JPanel upper = new JPanel(new GridLayout(1, 2, 6, 6));
         upper.add(queuePanel(newModel, newBorder, WIDTHS));
         upper.add(queuePanel(readyModel, readyBorder, WIDTHS));
@@ -112,9 +119,13 @@ public class ComputerPanel extends JPanel {
         g.weightx = 0.38;
         g.insets = new Insets(0, 3, 0, 0);
         lower.add(queuePanel(terminatedModel, terminatedBorder, TERMINATED_WIDTHS), g);
-        JPanel queues = new JPanel(new GridLayout(2, 1, 6, 6));
+        JPanel suspended = new JPanel(new GridLayout(1, 2, 6, 6));
+        suspended.add(queuePanel(readySuspModel, readySuspBorder, WIDTHS));
+        suspended.add(queuePanel(blockedSuspModel, blockedSuspBorder, BLOCKED_WIDTHS));
+        JPanel queues = new JPanel(new GridLayout(3, 1, 6, 6));
         queues.add(upper);
         queues.add(lower);
+        queues.add(suspended);
         add(queues, BorderLayout.CENTER);
     }
 
@@ -237,10 +248,14 @@ public class ComputerPanel extends JPanel {
         fill(readyModel, kernel.getReadySnapshot(), false, false);
         fill(blockedModel, kernel.getBlockedSnapshot(), true, false);
         fill(terminatedModel, kernel.getTerminatedSnapshot(), false, true);
+        fill(readySuspModel, kernel.getReadySuspendedSnapshot(), false, false);
+        fill(blockedSuspModel, kernel.getBlockedSuspendedSnapshot(), true, false);
         newBorder.setTitle("Nuevos (" + newModel.getRowCount() + ")");
         readyBorder.setTitle("Listos (" + readyModel.getRowCount() + ")");
         blockedBorder.setTitle("Bloqueados (" + blockedModel.getRowCount() + ")");
         terminatedBorder.setTitle("Terminados (" + terminatedModel.getRowCount() + ")");
+        readySuspBorder.setTitle("Listo/Suspendido (" + readySuspModel.getRowCount() + ")");
+        blockedSuspBorder.setTitle("Bloqueado/Suspendido (" + blockedSuspModel.getRowCount() + ")");
         repaint();
     }
 

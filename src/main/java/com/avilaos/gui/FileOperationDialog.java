@@ -23,81 +23,69 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 
-// Pide una operación sobre un archivo (crear, leer, actualizar o eliminar). La interfaz NUNCA la hace:
-// primero le pregunta a FileSystem si el modo y el usuario activos la permiten (y, si no, explica por qué
-// sin interrumpir la simulación); si sí, le entrega la orden a un FileOperationRequester, que crea el proceso
-// de E/S. Valida tipo de dato y rango de todos los campos antes de pedir nada.
+// Reemplaza a ProcessDialog en el Proyecto 2: el usuario elige la operación y el archivo, y la interfaz
+// solo entrega un FileOperation al sistema (que crea el proceso de E/S). Antes de entregarlo comprueba
+// permisos y estado con FileSystem.check...: si no se puede, explica por qué sin tocar la simulación.
 public class FileOperationDialog extends JDialog {
 
-    private static final int MAX_BLOCKS = 10000;
-
+    private final FileOperationRequester requester;
     private final FileSystem fileSystem;
     private final UserSession session;
-    private final FileOperationRequester requester;
 
-    private final JComboBox<IoOperation> operationBox = new JComboBox<>(new IoOperation[]{
+    private final JComboBox<IoOperation> opBox = new JComboBox<>(new IoOperation[]{
         IoOperation.CREATE, IoOperation.READ, IoOperation.UPDATE, IoOperation.DELETE});
-    private final JComboBox<String> existingPathBox = new JComboBox<>();
-    private final JTextField newPathField = new JTextField("/");
+    private final JComboBox<String> pathBox = new JComboBox<>();
     private final JComboBox<FileType> typeBox = new JComboBox<>(FileType.values());
     private final JTextField blocksField = new JTextField("4");
-    private final JComboBox<FilePermission> permissionBox = new JComboBox<>(FilePermission.values());
+    private final JComboBox<FilePermission> permBox = new JComboBox<>(FilePermission.values());
     private final JTextField newNameField = new JTextField();
 
-    // filas que aparecen o se ocultan según la operación
-    private final JPanel existingPathRow;
-    private final JPanel newPathRow;
     private final JPanel typeRow;
     private final JPanel blocksRow;
-    private final JPanel permissionRow;
+    private final JPanel permRow;
     private final JPanel newNameRow;
 
-    public FileOperationDialog(Window owner, FileSystem fileSystem, UserSession session,
-            FileOperationRequester requester) {
-        super(owner, "Operación sobre un archivo", ModalityType.APPLICATION_MODAL);
+    public FileOperationDialog(Window owner, FileOperationRequester requester, FileSystem fileSystem,
+            UserSession session) {
+        super(owner, "Operación sobre archivos", ModalityType.APPLICATION_MODAL);
+        this.requester = requester;
         this.fileSystem = fileSystem;
         this.session = session;
-        this.requester = requester;
 
         FileSystem.EntryInfo[] entries = fileSystem.snapshot();
         for (int i = 0; i < entries.length; i++) {
-            existingPathBox.addItem(entries[i].path());
+            pathBox.addItem(entries[i].path());
         }
+        pathBox.setEditable(true);
 
+        String who = session.getMode() == UserMode.USER ? "Usuario: " + session.getUser() : "Administrador";
         JPanel form = new JPanel();
         form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
         form.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        JLabel who = new JLabel("Modo: " + session.getMode()
-                + (session.getMode() == UserMode.USER ? "   Usuario: " + session.getUser() : ""));
-        who.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
-        form.add(who);
-        form.add(row("Operación:", operationBox));
-        existingPathRow = row("Archivo o directorio:", existingPathBox);
-        newPathRow = row("Ruta nueva (ej. /usuarios/a.txt):", newPathField);
-        typeRow = row("Tipo:", typeBox);
-        blocksRow = row("Tamaño en bloques (1-" + MAX_BLOCKS + "):", blocksField);
-        permissionRow = row("Permiso:", permissionBox);
+        form.add(row("Modo activo:", new JLabel(who)));
+        form.add(row("Operación:", opBox));
+        form.add(row("Ruta (elija o escriba):", pathBox));
+        typeRow = row("Crear un:", typeBox);
+        blocksRow = row("Tamaño en bloques (1-500):", blocksField);
+        permRow = row("Permiso:", permBox);
         newNameRow = row("Nombre nuevo:", newNameField);
-        form.add(existingPathRow);
-        form.add(newPathRow);
         form.add(typeRow);
         form.add(blocksRow);
-        form.add(permissionRow);
+        form.add(permRow);
         form.add(newNameRow);
 
-        JButton create = new JButton("Crear proceso de E/S");
+        JButton ok = new JButton("Crear proceso de E/S");
         JButton cancel = new JButton("Cancelar");
-        create.addActionListener(e -> submit());
+        ok.addActionListener(e -> submit());
         cancel.addActionListener(e -> dispose());
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         buttons.add(cancel);
-        buttons.add(create);
+        buttons.add(ok);
 
         setLayout(new BorderLayout());
         add(form, BorderLayout.CENTER);
         add(buttons, BorderLayout.SOUTH);
-
-        operationBox.addActionListener(e -> updateVisibleRows());
+        opBox.addActionListener(e -> updateVisibleRows());
         typeBox.addActionListener(e -> updateVisibleRows());
         updateVisibleRows();
         setLocationRelativeTo(owner);
@@ -111,75 +99,60 @@ public class FileOperationDialog extends JDialog {
         return panel;
     }
 
-    // BoxLayout no reserva espacio para componentes ocultos, por eso se usa setVisible
     private void updateVisibleRows() {
-        IoOperation op = (IoOperation) operationBox.getSelectedItem();
+        IoOperation op = (IoOperation) opBox.getSelectedItem();
         boolean create = op == IoOperation.CREATE;
-        existingPathRow.setVisible(!create);
-        newPathRow.setVisible(create);
         typeRow.setVisible(create);
         blocksRow.setVisible(create && typeBox.getSelectedItem() == FileType.FILE);
-        permissionRow.setVisible(create);
+        permRow.setVisible(create);
         newNameRow.setVisible(op == IoOperation.UPDATE);
         pack();
     }
 
     private void submit() {
         try {
-            IoOperation op = (IoOperation) operationBox.getSelectedItem();
-            UserMode mode = session.getMode();
-            String user = session.getUser();
-            String owner = mode == UserMode.USER ? user : "admin";
-            String reason;
-            FileOperation request;
-            String path;
-            switch (op) {
-                case CREATE: {
-                    path = newPathField.getText().trim();
-                    FileType type = (FileType) typeBox.getSelectedItem();
-                    int blocks = type == FileType.FILE ? readInt(blocksField, "Tamaño en bloques", 1, MAX_BLOCKS) : 0;
-                    FilePermission permission = (FilePermission) permissionBox.getSelectedItem();
-                    reason = fileSystem.checkCreate(path, type, blocks, mode, user);
-                    request = new FileOperation(op, path, type, blocks, permission, null, owner);
-                    break;
-                }
-                case READ:
-                    path = selectedExistingPath();
-                    reason = fileSystem.checkRead(path, mode, user);
-                    request = new FileOperation(op, path, null, 0, null, null, owner);
-                    break;
-                case UPDATE: {
-                    path = selectedExistingPath();
-                    String newName = newNameField.getText().trim();
-                    reason = fileSystem.checkUpdate(path, newName, mode, user);
-                    request = new FileOperation(op, path, null, 0, null, newName, owner);
-                    break;
-                }
-                case DELETE:
-                    path = selectedExistingPath();
-                    reason = fileSystem.checkDelete(path, mode, user);
-                    request = new FileOperation(op, path, null, 0, null, null, owner);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Operación no válida");
+            IoOperation op = (IoOperation) opBox.getSelectedItem();
+            Object edited = pathBox.getEditor().getItem();
+            String path = edited == null ? "" : edited.toString().trim();
+            if (path.isEmpty()) {
+                throw new IllegalArgumentException("La ruta no puede estar vacía");
             }
-            if (reason != null) {
-                JOptionPane.showMessageDialog(this, reason, "Operación rechazada", JOptionPane.WARNING_MESSAGE);
+            UserMode mode = session.getMode();
+            String user = mode == UserMode.USER ? session.getUser() : null;
+            String owner = mode == UserMode.USER ? user : "admin";
+
+            FileType type = null;
+            int blocks = 0;
+            FilePermission permission = null;
+            String newName = null;
+            String error;
+            switch (op) {
+                case CREATE -> {
+                    type = (FileType) typeBox.getSelectedItem();
+                    permission = (FilePermission) permBox.getSelectedItem();
+                    if (type == FileType.FILE) {
+                        blocks = readInt(blocksField, "Tamaño en bloques", 1, 500);
+                    }
+                    error = fileSystem.checkCreate(path, type, blocks, mode, user);
+                }
+                case READ -> error = fileSystem.checkRead(path, mode, user);
+                case UPDATE -> {
+                    newName = newNameField.getText().trim();
+                    error = fileSystem.checkUpdate(path, newName, mode, user);
+                }
+                case DELETE -> error = fileSystem.checkDelete(path, mode, user);
+                default -> error = "Operación no válida";
+            }
+            if (error != null) {
+                JOptionPane.showMessageDialog(this, "Operación rechazada: " + error,
+                        "Operación no permitida", JOptionPane.WARNING_MESSAGE);
                 return;
             }
-            requester.requestFileOperation(request);
+            requester.requestFileOperation(new FileOperation(op, path, type, blocks, permission, newName, owner));
             dispose();
         } catch (IllegalArgumentException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Dato inválido", JOptionPane.ERROR_MESSAGE);
         }
-    }
-
-    private String selectedExistingPath() {
-        Object selected = existingPathBox.getSelectedItem();
-        if (selected == null) {
-            throw new IllegalArgumentException("Elige un archivo o directorio");
-        }
-        return selected.toString();
     }
 
     private static int readInt(JTextField field, String label, int min, int max) {
