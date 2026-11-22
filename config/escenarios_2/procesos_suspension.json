@@ -1,0 +1,20 @@
+{
+  "globalConfig": {
+    "cycleDurationMs": 300,
+    "swapSizeBlocks": 100,
+    "initialDiskPolicy": "SSTF"
+  },
+  "computer": {
+    "ramCapacity": 48,
+    "policy": "FCFS",
+    "quantum": 0
+  },
+  "processes": [
+    { "name": "Lee_A", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/sistema/config.sys", "operation": "READ", "priority": 3 },
+    { "name": "Lee_B", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/usuarios/video.mp4", "operation": "READ", "priority": 2 },
+    { "name": "Lee_C", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/sistema/boot.bin",   "operation": "READ", "priority": 1 },
+    { "name": "Lee_D", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/usuarios/data.csv",  "operation": "READ", "priority": 1 },
+    { "name": "Lee_E", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/sistema/script.py",  "operation": "READ", "priority": 1 },
+    { "name": "Lee_F", "memory": 16, "deadline": 900, "instructions": 2, "targetPath": "/sistema/core.dll",   "operation": "READ", "priority": 1 }
+  ]
+}

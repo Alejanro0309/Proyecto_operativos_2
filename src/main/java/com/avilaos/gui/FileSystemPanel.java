@@ -108,4 +108,5 @@ public class FileSystemPanel extends JPanel {
                 + "Creado por: " + e.creator());
         details.setCaretPosition(0);
     }
+    
 }

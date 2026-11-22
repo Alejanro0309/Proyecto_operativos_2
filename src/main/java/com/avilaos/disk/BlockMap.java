@@ -116,6 +116,52 @@ public class BlockMap {
             lock.release();
         }
     }
+    // Ocupa una cadena explícita de bloques (pueden no ser contiguos) y los enlaza en orden.
+    // Es distinto de assign(): aquí recibimos el arreglo exacto int[] chain guardado en el JSON.
+    public void assignChain(BlockOwnerType type, String owner, int[] chain) {
+        if (type == null || type == BlockOwnerType.FREE) {
+            throw new IllegalArgumentException("El tipo debe ser FILE o SWAP");
+        }
+        if (owner == null || owner.trim().isEmpty()) {
+            throw new IllegalArgumentException("El dueño del bloque no puede estar vacío");
+        }
+        if (chain == null || chain.length == 0) {
+            throw new IllegalArgumentException("'" + owner + "': la cadena de bloques no puede estar vacía");
+        }
+        int from = type == BlockOwnerType.FILE ? 0 : fileAreaBlocks;
+        int to = type == BlockOwnerType.FILE ? fileAreaBlocks : blocks.length;
+
+        lock.acquireUninterruptibly();
+        try {
+            // 1. Validar toda la cadena antes de tocar ningún bloque
+            for (int i = 0; i < chain.length; i++) {
+                int b = chain[i];
+                if (b < from || b >= to) {
+                    throw new IllegalArgumentException("'" + owner + "': el bloque " + b
+                            + " no cabe en su zona (" + from + " a " + (to - 1) + ")");
+                }
+                if (!blocks[b].isFree()) {
+                    throw new IllegalArgumentException("'" + owner + "': el bloque " + b
+                            + " ya está ocupado por '" + blocks[b].getOwner() + "'");
+                }
+                for (int j = 0; j < i; j++) {
+                    if (chain[j] == b) {
+                        throw new IllegalArgumentException("'" + owner + "': la cadena repite el bloque " + b);
+                    }
+                }
+            }
+            // 2. Asignar y encadenar cada bloque en el orden del arreglo
+            for (int i = 0; i < chain.length; i++) {
+                blocks[chain[i]].assign(type, owner);
+                if (i > 0) {
+                    blocks[chain[i - 1]].setNext(chain[i]);
+                }
+            }
+        } finally {
+            lock.release();
+        }
+    }
+    
 
     // ---------------------------------------------------------------- liberar
 
