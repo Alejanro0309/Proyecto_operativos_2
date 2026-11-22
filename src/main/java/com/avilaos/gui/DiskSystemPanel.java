@@ -33,10 +33,10 @@ public class DiskSystemPanel extends JPanel {
     public DiskSystemPanel(FileSystem fileSystem, Disk disk, UserSession session, FileOperationRequester requester) {
         this.fileSystem = fileSystem;
         this.disk = disk;
-        diskPanel = new DiskPanel(fileSystem.getBlockMap(), disk);
+        diskPanel = new DiskPanel(disk, fileSystem.getBlockMap()); // <-- Orden correcto: (Disk, BlockMap)
         fileSystemPanel = new FileSystemPanel(fileSystem);
         allocationPanel = new AllocationTablePanel(fileSystem);
-        queuePanel = new DiskQueuePanel(disk, session);
+        queuePanel = new DiskQueuePanel(disk);                     // <-- Solo requiere Disk
 
         JButton saveButton = new JButton("Guardar sistema de archivos...");
         saveButton.addActionListener(e -> saveState());

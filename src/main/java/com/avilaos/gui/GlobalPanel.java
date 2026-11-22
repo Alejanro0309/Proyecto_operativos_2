@@ -23,8 +23,12 @@ import javax.swing.table.DefaultTableModel;
 // Parte global de la ventana: control del reloj, velocidad, alta de procesos y buffers,
 // tabla de buffers y log de eventos.
 //
+// En el Proyecto 2 (el clúster tiene sistema de archivos): el botón de procesos abre el diálogo de
+// operaciones sobre archivos, aparece el selector de modo (administrador / usuario) y se ocultan
+// los botones de buffers y de procesos aleatorios, que ya no aplican.
+//
 // Solo ENVÍA órdenes al Cluster (start/pause/resume/stop, setCycleDurationMs, submit,
-// createBuffer) y LEE copias seguras (getBuffersSnapshot -> BoundedBuffer.snapshot()).
+// createBuffer, requestFileOperation) y LEE copias seguras (getBuffersSnapshot -> BoundedBuffer.snapshot()).
 // No decide nada del sistema.
 public class GlobalPanel extends JPanel {
 
@@ -54,6 +58,9 @@ public class GlobalPanel extends JPanel {
     private final JButton randomOneButton = new JButton("Proceso aleatorio");
     private final JButton randomFiveButton = new JButton("5 aleatorios");
 
+    // Proyecto 2: selector de modo de usuario (null en el Proyecto 1)
+    private ModePanel modePanel;
+
     private final DefaultTableModel buffersModel = new DefaultTableModel(new Object[0][0], BUFFER_COLUMNS) {
         @Override
         public boolean isCellEditable(int row, int column) {
@@ -64,6 +71,7 @@ public class GlobalPanel extends JPanel {
     public GlobalPanel(Cluster cluster, JTextArea logArea) {
         this.cluster = cluster;
         speedField.setText(String.valueOf(cluster.getClock().getCycleDurationMs()));
+        final boolean p2 = cluster.getFileSystem() != null;
 
         startButton.addActionListener(e -> {
             cluster.start();
@@ -80,19 +88,29 @@ public class GlobalPanel extends JPanel {
         stopButton.addActionListener(e -> confirmStop());
         backButton.addActionListener(e -> confirmBack());
         JButton speedButton = new JButton("Aplicar");
-        
+
         speedButton.addActionListener(e -> applySpeed());
-        processButton.addActionListener(e ->
-                new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
+        if (p2) {
+            modePanel = new ModePanel(cluster.getFileSystem());
+            processButton.setText("Operación de archivo...");
+            processButton.addActionListener(e -> new FileOperationDialog(
+                    SwingUtilities.getWindowAncestor(this), cluster, cluster.getFileSystem(), modePanel)
+                    .setVisible(true));
+        } else {
+            processButton.addActionListener(e ->
+                    new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
+        }
         bufferButton.addActionListener(e ->
                 new BufferDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
         randomOneButton.addActionListener(e -> addRandomProcesses(1));
         randomFiveButton.addActionListener(e -> addRandomProcesses(5));
-        
+
         JPanel clockRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         clockRow.add(cycleLabel);
         clockRow.add(stateLabel);
-        clockRow.add(latencyLabel);
+        if (!p2) {
+            clockRow.add(latencyLabel);
+        }
         clockRow.add(startButton);
         clockRow.add(pauseButton);
         clockRow.add(resumeButton);
@@ -104,31 +122,38 @@ public class GlobalPanel extends JPanel {
 
         JPanel createRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         createRow.add(processButton);
-        createRow.add(bufferButton);
-        createRow.add(new JLabel("  Pruebas:"));
-        createRow.add(randomOneButton);
-        createRow.add(randomFiveButton);
+        if (p2) {
+            createRow.add(modePanel);
+        } else {
+            createRow.add(bufferButton);
+            createRow.add(new JLabel("  Pruebas:"));
+            createRow.add(randomOneButton);
+            createRow.add(randomFiveButton);
+        }
 
         JPanel controls = new JPanel();
         controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
         controls.add(clockRow);
         controls.add(createRow);
 
-        JTable buffersTable = new JTable(buffersModel);
-        buffersTable.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
-        buffersTable.setFillsViewportHeight(true);
-        JScrollPane buffersScroll = new JScrollPane(buffersTable);
-        buffersScroll.setBorder(BorderFactory.createTitledBorder("Buffers (semáforos y procesos en espera)"));
-
         JScrollPane logScroll = new JScrollPane(logArea);
         logScroll.setBorder(BorderFactory.createTitledBorder("Log de eventos"));
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buffersScroll, logScroll);
-        split.setResizeWeight(0.55);
-
         setLayout(new BorderLayout());
         add(controls, BorderLayout.NORTH);
-        add(split, BorderLayout.CENTER);
+        if (p2) {
+            // sin buffers en el Proyecto 2: el log ocupa todo el ancho
+            add(logScroll, BorderLayout.CENTER);
+        } else {
+            JTable buffersTable = new JTable(buffersModel);
+            buffersTable.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
+            buffersTable.setFillsViewportHeight(true);
+            JScrollPane buffersScroll = new JScrollPane(buffersTable);
+            buffersScroll.setBorder(BorderFactory.createTitledBorder("Buffers (semáforos y procesos en espera)"));
+            JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buffersScroll, logScroll);
+            split.setResizeWeight(0.55);
+            add(split, BorderLayout.CENTER);
+        }
         setState(ClockState.SIN_INICIAR);
     }
 
@@ -146,7 +171,6 @@ public class GlobalPanel extends JPanel {
         }
     }
 
-    
     // MainFrame decide qué hacer al volver (cerrar esta ventana y abrir la configuración)
     public void setOnBackToConfig(Runnable action) {
         this.onBackToConfig = action;
@@ -167,7 +191,7 @@ public class GlobalPanel extends JPanel {
         }
         onBackToConfig.run();
     }
-    
+
     // La duración se puede cambiar con el reloj corriendo (GlobalClock.cycleDurationMs es volatile)
     private void applySpeed() {
         int ms;
@@ -188,7 +212,7 @@ public class GlobalPanel extends JPanel {
         }
     }
 
-    // Solo para pruebas: manda procesos con valores al azar usando la misma orden submit
+    // Solo para pruebas (Proyecto 1): manda procesos con valores al azar usando la misma orden submit
     private void addRandomProcesses(int count) {
         for (int i = 0; i < count; i++) {
             try {
@@ -223,6 +247,9 @@ public class GlobalPanel extends JPanel {
     public void refresh() {
         cycleLabel.setText("Ciclo actual: " + cluster.getCurrentCycle());
         latencyLabel.setText("  Latencia de red: " + cluster.getNetworkLatency() + " ciclos  ");
+        if (cluster.getFileSystem() != null) {
+            return;                  // Proyecto 2: no hay tabla de buffers que refrescar
+        }
 
         // snapshot() entrega una copia inmutable del buffer; aquí no se toca el buffer real
         Object[] raw = cluster.getBuffersSnapshot();

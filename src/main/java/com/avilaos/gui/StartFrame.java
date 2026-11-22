@@ -32,7 +32,6 @@ public class StartFrame extends JFrame {
     private String fsName;
     private WorkloadConfig workload;
     private String workloadName;
-
     private final JLabel fsLabel = new JLabel("Sin cargar");
     private final JLabel workloadLabel = new JLabel("Sin cargar");
     private final JButton startButton = new JButton("Iniciar simulación");
