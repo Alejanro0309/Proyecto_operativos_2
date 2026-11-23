@@ -1,14 +1,18 @@
 package com.avilaos.gui;
 
+import com.avilaos.config.FileSystemLoader;
+import com.avilaos.disk.DiskStatus;
 import com.avilaos.model.ProcessControlBlock;
 import com.avilaos.sync.BoundedBuffer;
 import com.avilaos.sync.BufferStatus;
 import com.avilaos.system.Cluster;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.io.File;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -18,18 +22,19 @@ import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 
 // Parte global de la ventana: control del reloj, velocidad, alta de procesos y buffers,
 // tabla de buffers y log de eventos.
 //
 // En el Proyecto 2 (el clúster tiene sistema de archivos): el botón de procesos abre el diálogo de
-// operaciones sobre archivos, aparece el selector de modo (administrador / usuario) y se ocultan
-// los botones de buffers y de procesos aleatorios, que ya no aplican.
+// operaciones sobre archivos, aparece el selector de modo (administrador / usuario), el botón para
+// guardar el sistema de archivos en JSON, y se ocultan los buffers y los procesos aleatorios.
+// Además, la simulación se pausa sola cuando ya no queda ningún proceso activo ni solicitud en el
+// disco (así las métricas y la gráfica no se distorsionan con ciclos vacíos); "Reanudar" la continúa.
 //
-// Solo ENVÍA órdenes al Cluster (start/pause/resume/stop, setCycleDurationMs, submit,
-// createBuffer, requestFileOperation) y LEE copias seguras (getBuffersSnapshot -> BoundedBuffer.snapshot()).
-// No decide nada del sistema.
+// Solo ENVÍA órdenes al Cluster y LEE copias seguras. No decide nada del sistema.
 public class GlobalPanel extends JPanel {
 
     // GlobalClock no se puede reiniciar: tras stop() sus hilos mueren (ver ClockWorker.stop).
@@ -41,6 +46,7 @@ public class GlobalPanel extends JPanel {
         "Esperan en s", "Esperan en n", "Esperan en e", "Producidos", "Consumidos"};
 
     private final Cluster cluster;
+    private final boolean p2;
     private ClockState state = ClockState.SIN_INICIAR;
 
     private final JLabel cycleLabel = new JLabel("Ciclo actual: 0");
@@ -57,6 +63,7 @@ public class GlobalPanel extends JPanel {
     private final JButton bufferButton = new JButton("Crear buffer...");
     private final JButton randomOneButton = new JButton("Proceso aleatorio");
     private final JButton randomFiveButton = new JButton("5 aleatorios");
+    private final JButton saveFsButton = new JButton("Guardar sistema de archivos...");
 
     // Proyecto 2: selector de modo de usuario (null en el Proyecto 1)
     private ModePanel modePanel;
@@ -70,8 +77,8 @@ public class GlobalPanel extends JPanel {
 
     public GlobalPanel(Cluster cluster, JTextArea logArea) {
         this.cluster = cluster;
+        this.p2 = cluster.getFileSystem() != null;
         speedField.setText(String.valueOf(cluster.getClock().getCycleDurationMs()));
-        final boolean p2 = cluster.getFileSystem() != null;
 
         startButton.addActionListener(e -> {
             cluster.start();
@@ -96,6 +103,7 @@ public class GlobalPanel extends JPanel {
             processButton.addActionListener(e -> new FileOperationDialog(
                     SwingUtilities.getWindowAncestor(this), cluster, cluster.getFileSystem(), modePanel)
                     .setVisible(true));
+            saveFsButton.addActionListener(e -> saveFileSystem());
         } else {
             processButton.addActionListener(e ->
                     new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
@@ -124,6 +132,7 @@ public class GlobalPanel extends JPanel {
         createRow.add(processButton);
         if (p2) {
             createRow.add(modePanel);
+            createRow.add(saveFsButton);
         } else {
             createRow.add(bufferButton);
             createRow.add(new JLabel("  Pruebas:"));
@@ -158,6 +167,29 @@ public class GlobalPanel extends JPanel {
     }
 
     // ---------------------------------------------------------------- órdenes
+
+    // Guarda el estado actual del disco (directorios, archivos, bloques de cada uno, dueños, permisos y
+    // posición del cabezal) en un JSON que se puede cargar en otra ejecución. Es solo lectura del sistema.
+    private void saveFileSystem() {
+        JFileChooser chooser = new JFileChooser(new File("config"));
+        chooser.setFileFilter(new FileNameExtensionFilter("Sistema de archivos de ÁvilaOS (*.json)", "json"));
+        chooser.setSelectedFile(new File("sistema_archivos_guardado.json"));
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File file = chooser.getSelectedFile();
+        if (!file.getName().endsWith(".json")) {
+            file = new File(file.getPath() + ".json");
+        }
+        try {
+            FileSystemLoader.save(cluster.getFileSystem(), cluster.getDisk().getTotalBlocks(),
+                    cluster.getDisk().snapshot().headPosition(), file);
+            JOptionPane.showMessageDialog(this, "Sistema de archivos guardado en " + file.getName(),
+                    "Guardado", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IllegalArgumentException ex) {
+            error(ex.getMessage());
+        }
+    }
 
     private void confirmStop() {
         int answer = JOptionPane.showConfirmDialog(this,
@@ -247,7 +279,8 @@ public class GlobalPanel extends JPanel {
     public void refresh() {
         cycleLabel.setText("Ciclo actual: " + cluster.getCurrentCycle());
         latencyLabel.setText("  Latencia de red: " + cluster.getNetworkLatency() + " ciclos  ");
-        if (cluster.getFileSystem() != null) {
+        if (p2) {
+            pauseIfNothingLeftToDo();
             return;                  // Proyecto 2: no hay tabla de buffers que refrescar
         }
 
@@ -261,6 +294,23 @@ public class GlobalPanel extends JPanel {
                 st.valueS(), st.valueN(), st.valueE(),
                 names(st.waitingS()), names(st.waitingN()), names(st.waitingE()),
                 st.produced(), st.consumed()});
+        }
+    }
+
+    // Proyecto 2: cuando no queda ningún proceso vivo (ni suspendido) y el disco está libre y sin cola,
+    // el reloj se pausa solo. Una operación nueva se crea igual; "Reanudar" la procesa.
+    private void pauseIfNothingLeftToDo() {
+        if (state != ClockState.EN_EJECUCION || cluster.getCurrentCycle() <= 0) {
+            return;
+        }
+        DiskStatus disk = cluster.getDisk().snapshot();
+        boolean idle = cluster.getComputer(0).getKernel().getActiveProcessCount() == 0
+                && !disk.busy() && disk.queue().length == 0;
+        if (idle) {
+            cluster.pause();
+            setState(ClockState.EN_PAUSA);
+            cluster.getLogger().log(cluster.getCurrentCycle(), 0,
+                    "Simulación en pausa: no quedan procesos activos ni solicitudes en el disco");
         }
     }
 

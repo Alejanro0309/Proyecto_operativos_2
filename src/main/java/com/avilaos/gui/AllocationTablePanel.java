@@ -16,8 +16,8 @@ import javax.swing.table.DefaultTableModel;
 // Tabla de asignación de archivos: por cada archivo muestra su color en el mapa de bloques, su ruta,
 // cantidad de bloques, primer bloque, dueño y el proceso que lo creó. Solo lee FileSystem.snapshot()
 // y solo se rellena cuando algo cambió (así no pierde la selección ni el scroll en cada refresco).
-// El color sale de FileColors.forOwner(ruta): BlockMap rotula los bloques con la ruta del archivo,
-// por lo que el DiskPanel y esta tabla pintan el mismo archivo con el mismo color.
+// El color sale de FileColors.forFile con la lista de primeros bloques: es el mismo cálculo que hace
+// DiskPanel, por eso el archivo se ve igual en la tabla y en el mapa, y no cambia al renombrarlo.
 public class AllocationTablePanel extends JPanel {
 
     private static final String[] COLUMNS = {"Color", "Archivo", "Bloques", "Primer bloque", "Dueño", "Creado por"};
@@ -68,14 +68,23 @@ public class AllocationTablePanel extends JPanel {
         int selected = table.getSelectedRow();
         Object selectedPath = selected >= 0 ? model.getValueAt(selected, 1) : null;
 
+        // primeros bloques de todos los archivos: de ahí sale el color de cada uno
+        int[] starts = new int[entries.length];
+        int count = 0;
+        for (int i = 0; i < entries.length; i++) {
+            if (entries[i].type() == FileType.FILE) {
+                starts[count++] = entries[i].startBlock();
+            }
+        }
+
         model.setRowCount(0);
         for (int i = 0; i < entries.length; i++) {
             FileSystem.EntryInfo e = entries[i];
             if (e.type() != FileType.FILE) {
                 continue;                       // los directorios no ocupan bloques
             }
-            model.addRow(new Object[]{FileColors.forOwner(e.path()), e.path(), e.blocks(),
-                e.startBlock(), e.owner(), e.creator()});
+            model.addRow(new Object[]{FileColors.forFile(e.startBlock(), starts, count), e.path(),
+                e.blocks(), e.startBlock(), e.owner(), e.creator()});
         }
         border.setTitle("Tabla de asignación de archivos (" + model.getRowCount() + ")");
         if (selectedPath != null) {

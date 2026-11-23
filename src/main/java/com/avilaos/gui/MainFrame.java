@@ -18,8 +18,15 @@ import javax.swing.Timer;
 
 // Ventana principal. Arriba, pestañas; abajo, el panel global (reloj, log, modo de usuario).
 // Si el clúster tiene disco (Proyecto 2) se agregan las pestañas Archivos, Disco, Métricas del disco
-// y Gráfica del cabezal. Un Timer de Swing relee todo cada 100 ms; solo se refresca la pestaña visible
+// y Gráfica del cabezal, y no se muestra "Resumen (todos)" (hay un solo computador).
+// Un Timer de Swing relee todo cada 100 ms; solo se refresca la pestaña visible
 // (el árbol y la tabla de asignación siempre: solo se redibujan si algo cambió).
+//
+// Hay tres formas de crearla:
+//  - (cluster, log): sin nada para volver;
+//  - (cluster, log, SimulationConfig): Proyecto 1, "Volver" abre la configuración con esos datos;
+//  - (cluster, log, Runnable): Proyecto 2, "Volver" ejecuta ese Runnable (StartFrame lo usa para
+//    reabrir la pantalla de carga de archivos).
 public class MainFrame extends JFrame {
 
     private static final int REFRESH_MS = 100;
@@ -33,7 +40,6 @@ public class MainFrame extends JFrame {
     private final UtilizationChartPanel chartPanel;
     private final GlobalPanel globalPanel;
     private final Timer timer;
-    private final Runnable onBack;
 
     // Proyecto 2 (null en el Proyecto 1)
     private FileSystemPanel fsPanel;
@@ -46,19 +52,22 @@ public class MainFrame extends JFrame {
     private HeadDisplacementChartPanel headChartPanel;
 
     public MainFrame(Cluster cluster, JTextArea logArea) {
-        this(cluster, logArea, (SimulationConfig) null);
+        this(cluster, logArea, null, null);
     }
 
-    // initialConfig: la configuración con la que se inició, para "Volver a la configuración"
+    // Proyecto 1: initialConfig es la configuración con la que se inició, para "Volver a la configuración"
     public MainFrame(Cluster cluster, JTextArea logArea, SimulationConfig initialConfig) {
-        this(cluster, logArea, () -> new ConfigFrame(initialConfig).setVisible(true));
+        this(cluster, logArea, initialConfig, null);
     }
 
-    // onBack: acción al pulsar "Volver" (ConfigFrame en Proyecto 1, StartFrame en Proyecto 2)
+    // Proyecto 2: onBack es lo que se hace al volver (por ejemplo, reabrir StartFrame)
     public MainFrame(Cluster cluster, JTextArea logArea, Runnable onBack) {
+        this(cluster, logArea, null, onBack);
+    }
+
+    private MainFrame(Cluster cluster, JTextArea logArea, SimulationConfig initialConfig, Runnable onBack) {
         super("ÁvilaOS - Simulación");
         this.cluster = cluster;
-        this.onBack = (onBack != null) ? onBack : () -> new ConfigFrame(null).setVisible(true);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         boolean p2 = cluster.getDisk() != null && cluster.getFileSystem() != null;
 
@@ -74,7 +83,9 @@ public class MainFrame extends JFrame {
 
         int n = cluster.getComputerCount();
         summaryPanel = new SummaryPanel(cluster);
-        tabs.addTab("Resumen (todos)", summaryPanel);
+        if (!p2) {
+            tabs.addTab("Resumen (todos)", summaryPanel);   // con un solo computador repetiría su pestaña
+        }
         computerPanels = new ComputerPanel[n];
         for (int i = 0; i < n; i++) {
             computerPanels[i] = new ComputerPanel(cluster.getComputer(i).getKernel());
@@ -90,8 +101,9 @@ public class MainFrame extends JFrame {
 
             diskPanel = new DiskPanel(cluster.getDisk(), cluster.getFileSystem().getBlockMap());
             diskQueuePanel = new DiskQueuePanel(cluster.getDisk());
+            diskQueuePanel.setPreferredSize(new Dimension(0, 150));   // la cola casi siempre está corta
             diskTab = new JSplitPane(JSplitPane.VERTICAL_SPLIT, diskPanel, diskQueuePanel);
-            diskTab.setResizeWeight(0.6);
+            diskTab.setResizeWeight(0.85);                            // el mapa se queda con casi todo el espacio
             tabs.addTab("Disco", diskTab);
         }
 
@@ -125,16 +137,21 @@ public class MainFrame extends JFrame {
                 cluster.stop();
             }
         });
-        globalPanel.setOnBackToConfig(this::backToConfig);
+        globalPanel.setOnBackToConfig(() -> goBack(initialConfig, onBack));
         timer.start();
     }
 
-    // Detiene todo (reloj, hilos y refresco) y vuelve a la vista anterior
-    private void backToConfig() {
+    // Detiene todo (reloj, hilos y refresco) y vuelve a donde corresponda:
+    // al Runnable del Proyecto 2 si lo hay, o a la configuración del Proyecto 1.
+    private void goBack(SimulationConfig initialConfig, Runnable onBack) {
         timer.stop();
         cluster.stop();
         dispose();
-        onBack.run();
+        if (onBack != null) {
+            onBack.run();
+        } else {
+            new ConfigFrame(initialConfig).setVisible(true);
+        }
     }
 
     private void refresh() {
