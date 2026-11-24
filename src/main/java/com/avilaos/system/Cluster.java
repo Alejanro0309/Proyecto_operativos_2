@@ -145,6 +145,7 @@ public final class Cluster implements FileOperationRequester {
         ProcessControlBlock p = ProcessControlBlock.createFileIoProcess(
                 name, 0, 1, memory, 500, 2, op.operation(), path);
         p.setOwner(op.owner());
+        p.setRequesterMode(op.mode());
         if (op.operation() == IoOperation.UPDATE) {
             p.setNewName(op.newName());
         }

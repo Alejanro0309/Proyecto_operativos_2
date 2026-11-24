@@ -711,6 +711,9 @@ public class Kernel implements DiskCompletionListener {
 
     /** Los procesos de admin tienen todos los permisos; los demás, los de modo usuario. */
     private static UserMode modeOf(ProcessControlBlock p) {
+        if (p.getRequesterMode() != null) {
+            return p.getRequesterMode();
+        }
         return "admin".equals(p.getOwner()) ? UserMode.ADMINISTRATOR : UserMode.USER;
     }
 
