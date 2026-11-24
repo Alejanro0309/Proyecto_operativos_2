@@ -24,6 +24,7 @@ import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
+import com.avilaos.enums.UserMode;
 
 // Parte global de la ventana: control del reloj, velocidad, alta de procesos y buffers,
 // tabla de buffers y log de eventos.
@@ -64,6 +65,7 @@ public class GlobalPanel extends JPanel {
     private final JButton randomOneButton = new JButton("Proceso aleatorio");
     private final JButton randomFiveButton = new JButton("5 aleatorios");
     private final JButton saveFsButton = new JButton("Guardar sistema de archivos...");
+    private final JButton cpuProcessButton = new JButton("Crear proceso CPU/E/S...");
 
     // Proyecto 2: selector de modo de usuario (null en el Proyecto 1)
     private ModePanel modePanel;
@@ -104,6 +106,15 @@ public class GlobalPanel extends JPanel {
                     SwingUtilities.getWindowAncestor(this), cluster, cluster.getFileSystem(), modePanel)
                     .setVisible(true));
             saveFsButton.addActionListener(e -> saveFileSystem());
+            cpuProcessButton.addActionListener(e -> {
+                if (modePanel.getMode() == UserMode.USER) {
+                    JOptionPane.showMessageDialog(this,
+                            "Operación rechazada: en modo usuario solo se pueden crear procesos de E/S sobre archivos propios.",
+                            "Operación no permitida", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true);
+            });
         } else {
             processButton.addActionListener(e ->
                     new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
@@ -131,6 +142,7 @@ public class GlobalPanel extends JPanel {
         JPanel createRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         createRow.add(processButton);
         if (p2) {
+            createRow.add(cpuProcessButton);
             createRow.add(modePanel);
             createRow.add(saveFsButton);
         } else {
@@ -267,6 +279,7 @@ public class GlobalPanel extends JPanel {
         bufferButton.setEnabled(canCreate);
         randomOneButton.setEnabled(canCreate);
         randomFiveButton.setEnabled(canCreate);
+        cpuProcessButton.setEnabled(canCreate);
         stateLabel.setText("  Estado: " + state.name().replace('_', ' ').toLowerCase() + "  ");
     }
 

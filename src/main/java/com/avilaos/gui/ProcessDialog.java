@@ -31,7 +31,7 @@ public class ProcessDialog extends JDialog {
     private final BoundedBuffer[] buffers;
 
     private final JTextField nameField = new JTextField("Proceso");
-    private final JComboBox<ProcessType> typeBox = new JComboBox<>(ProcessType.values());
+    private final JComboBox<ProcessType> typeBox;
     private final JComboBox<String> computerBox = new JComboBox<>();
     private final JTextField priorityField = new JTextField("1");
     private final JTextField memoryField = new JTextField("16");
@@ -54,6 +54,12 @@ public class ProcessDialog extends JDialog {
     public ProcessDialog(Window owner, Cluster cluster) {
         super(owner, "Crear proceso", ModalityType.APPLICATION_MODAL);
         this.cluster = cluster;
+        
+        ProcessType[] allowedTypes = (cluster.getFileSystem() != null)
+                ? new ProcessType[]{ProcessType.CPU_BOUND, ProcessType.IO_BOUND}
+                : new ProcessType[]{ProcessType.CPU_BOUND, ProcessType.IO_BOUND,
+                    ProcessType.PRODUCER, ProcessType.CONSUMER};
+        this.typeBox = new JComboBox<>(allowedTypes);
 
         computerBox.addItem("Automático");
         for (int i = 0; i < cluster.getComputerCount(); i++) {
