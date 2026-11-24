@@ -39,6 +39,7 @@ public class CPU implements ClockListener {
     private int busyCycles;
     private int idleCycles;
     private boolean busyLastCycle;
+    private volatile ProcessControlBlock lastExecuted;
 
     public CPU(int computerId) {
         this.computerId = computerId;
@@ -87,6 +88,7 @@ public class CPU implements ClockListener {
             mode = CPUMode.KERNEL_MODE;
             idleCycles++;
             busyLastCycle = false;
+            lastExecuted = null;
             return;
         }
         mode = CPUMode.USER_MODE;
@@ -94,6 +96,7 @@ public class CPU implements ClockListener {
         busyCycles++;
         quantumUsed++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     /**
@@ -111,6 +114,7 @@ public class CPU implements ClockListener {
         busyCycles++;
         quantumUsed++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     /**
@@ -122,6 +126,7 @@ public class CPU implements ClockListener {
         mode = CPUMode.KERNEL_MODE;
         busyCycles++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     // ---------------------------------------------------------------- consultas
@@ -132,6 +137,10 @@ public class CPU implements ClockListener {
 
     public ProcessControlBlock getRunning() {
         return running;
+    }
+    
+    public ProcessControlBlock getLastExecuted() {
+        return lastExecuted;
     }
 
     public CPUMode getMode() {

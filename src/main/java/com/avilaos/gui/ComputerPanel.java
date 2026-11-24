@@ -263,6 +263,11 @@ public class ComputerPanel extends JPanel {
     private void refreshCpu() {
         CPU cpu = kernel.getCpu();
         ProcessControlBlock running = cpu.getRunning();
+        boolean fromLastCycle = false;
+        if (running == null && cpu.wasBusyLastCycle()) {
+            running = cpu.getLastExecuted();
+            fromLastCycle = (running != null);
+        }
         if (running == null) {
             processLabel.setText("Ninguno (CPU libre)");
             typeLabel.setText("—");
@@ -276,7 +281,8 @@ public class ComputerPanel extends JPanel {
             deadlineLabel.setText("—");
             remainingLabel.setText("—");
         } else {
-            processLabel.setText("P" + running.getId() + " " + running.getName());
+            processLabel.setText("P" + running.getId() + " " + running.getName()
+                    + (fromLastCycle ? " (último ciclo)" : ""));
             typeLabel.setText(running.getType().name());
             stateLabel.setText(running.getState().name());
             computerLabel.setText("PC" + running.getAssignedComputerId());
