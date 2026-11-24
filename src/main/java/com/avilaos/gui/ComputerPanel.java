@@ -216,18 +216,19 @@ public class ComputerPanel extends JPanel {
     // ---------------------------------------------------------------- orden: cambiar política
 
     private void applyPolicy() {
+        SchedulingPolicy policy = SchedulingPolicy.valueOf((String) policyBox.getSelectedItem());
+        int minQuantum = (policy == SchedulingPolicy.ROUND_ROBIN) ? 1 : 0;
         int quantum;
         try {
             quantum = Integer.parseInt(quantumField.getText().trim());
         } catch (NumberFormatException e) {
-            showError("El quantum debe ser un número entero entre 1 y 100");
+            showError("El quantum debe ser un número entero entre " + minQuantum + " y 100");
             return;
         }
-        if (quantum < 1 || quantum > 100) {
-            showError("El quantum debe estar entre 1 y 100 (recibido: " + quantum + ")");
+        if (quantum < minQuantum || quantum > 100) {
+            showError("El quantum debe estar entre " + minQuantum + " y 100 (recibido: " + quantum + ")");
             return;
         }
-        SchedulingPolicy policy = SchedulingPolicy.valueOf((String) policyBox.getSelectedItem());
         try {
             kernel.setSchedulingPolicy(policy, quantum);
         } catch (IllegalArgumentException ex) {

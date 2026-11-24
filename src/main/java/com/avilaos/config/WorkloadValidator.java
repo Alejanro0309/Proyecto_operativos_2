@@ -25,7 +25,7 @@ public final class WorkloadValidator {
             throw new IllegalArgumentException("Falta globalConfig");
         }
         range("Duración del ciclo (cycleDurationMs)", c.globalConfig.cycleDurationMs, 0, 10000);
-        range("Tamaño del swap (swapSizeBlocks)", c.globalConfig.swapSizeBlocks, 0, 1000);
+        range("Tamaño del swap (swapSizeBlocks)", c.globalConfig.swapSizeBlocks, 1, 1000);
         if (c.globalConfig.headSpeed != 0) {
             range("Posiciones del cabezal por ciclo (headSpeed)", c.globalConfig.headSpeed, 1, 1000);
         }
