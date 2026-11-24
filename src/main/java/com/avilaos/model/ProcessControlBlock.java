@@ -14,6 +14,7 @@ import com.avilaos.sync.BoundedBuffer;
 import com.avilaos.enums.FilePermission;
 import com.avilaos.enums.FileType;
 import com.avilaos.enums.IoOperation;
+import com.avilaos.enums.UserMode;
 
 /**
  * Bloque de control de proceso (PCB).
@@ -59,7 +60,8 @@ public class ProcessControlBlock {
     private boolean remoteAccessReady;  // ya pagó la latencia de la operación remota actual
     private IoOperation ioOperation;   // CREATE, READ, UPDATE o DELETE
     private String targetPath;         // ruta del archivo o directorio
-    private String owner = "admin";    // usuario que creó el proceso (permisos)
+    private String owner = "admin";
+    private UserMode requesterMode;    // usuario que creó el proceso (permisos)
     private String newName;            // UPDATE: nombre nuevo
     private FileType createType;       // CREATE: archivo o directorio
     private int createBlocks;          // CREATE: tamaño del archivo en bloques
@@ -223,7 +225,14 @@ public class ProcessControlBlock {
         }
         this.owner = owner.trim();
     }
+    
+    /** Modo de usuario con el que se solicitó la operación (null = se deduce del dueño). */
+    public void setRequesterMode(UserMode mode) {
+        this.requesterMode = mode;
+    }
 
+    public UserMode getRequesterMode() { return requesterMode; }
+    
     /** UPDATE: nombre nuevo del archivo o directorio. */
     public void setNewName(String newName) {
         requireOperation(IoOperation.UPDATE);
