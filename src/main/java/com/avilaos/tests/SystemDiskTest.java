@@ -115,11 +115,19 @@ public class SystemDiskTest {
         Cluster c = newSystem(5, 2);
         c.start();
         Thread.sleep(100);
+        ThreadGroup root = Thread.currentThread().getThreadGroup();
+        while (root.getParent() != null) {
+            root = root.getParent();
+        }
+        Thread[] threads = new Thread[root.activeCount() * 2 + 16];
+        int count = root.enumerate(threads, true);
         boolean diskThread = false;
         boolean computerThread = false;
-        for (Thread t : Thread.getAllStackTraces().keySet()) {
-            diskThread |= t.getName().equals("Disk");
-            computerThread |= t.getName().equals("Computer-0");
+        for (int i = 0; i < count; i++) {
+            if (threads[i] != null) {
+                diskThread |= threads[i].getName().equals("Disk");
+                computerThread |= threads[i].getName().equals("Computer-0");
+            }
         }
         c.stop();
         check("el disco corre en su propio hilo (\"Disk\")", diskThread);

@@ -269,11 +269,11 @@ public class Project2ConfigTest {
     // ================================================================ integración con los JSON de ejemplo
 
     private static void testSampleFiles() {
-        File fsFile = new File("config/proyecto2/sistema_archivos.json");
-        File procFile = new File("config/proyecto2/procesos.json");
-        File suspFile = new File("config/proyecto2/procesos_suspension.json");
+       File fsFile = new File("config/escenarios_2/sistema_archivos.json");
+        File procFile = new File("config/escenarios_2/procesos.json");
+        File suspFile = new File("config/escenarios_2/procesos_suspension.json");
         if (!fsFile.exists() || !procFile.exists() || !suspFile.exists()) {
-            System.out.println("[OMITIDA] faltan los JSON de ejemplo en config/proyecto2 (se corre desde la carpeta del proyecto)");
+            System.out.println("[OMITIDA] faltan los JSON de ejemplo en config/escenarios_2 (se corre desde la carpeta del proyecto)");
             return;
         }
         FileSystemConfig fsCfg = FileSystemLoader.load(fsFile);
