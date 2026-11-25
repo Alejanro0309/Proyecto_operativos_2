@@ -38,11 +38,13 @@ public class FileOperationDialog extends JDialog {
     private final JComboBox<FileType> typeBox = new JComboBox<>(FileType.values());
     private final JTextField blocksField = new JTextField("4");
     private final JComboBox<FilePermission> permBox = new JComboBox<>(FilePermission.values());
+    private final JComboBox<String> ownerBox = new JComboBox<>();
     private final JTextField newNameField = new JTextField();
 
     private final JPanel typeRow;
     private final JPanel blocksRow;
     private final JPanel permRow;
+    private final JPanel ownerRow;
     private final JPanel newNameRow;
 
     public FileOperationDialog(Window owner, FileOperationRequester requester, FileSystem fileSystem,
@@ -58,6 +60,28 @@ public class FileOperationDialog extends JDialog {
         }
         pathBox.setEditable(true);
 
+        // Llena los dueños disponibles (admin + usuarios presentes en el árbol, sin usar colecciones de Java)
+        ownerBox.addItem("admin");
+        String[] foundOwners = new String[entries.length];
+        int ownerCount = 0;
+        for (int i = 0; i < entries.length; i++) {
+            String o = entries[i].owner();
+            if ("admin".equals(o)) {
+                continue;
+            }
+            boolean known = false;
+            for (int j = 0; j < ownerCount; j++) {
+                known |= foundOwners[j].equals(o);
+            }
+            if (!known) {
+                foundOwners[ownerCount++] = o;
+                ownerBox.addItem(o);
+            }
+        }
+        if (ownerCount == 0) {
+            ownerBox.addItem("user1");
+        }
+
         String who = session.getMode() == UserMode.USER ? "Usuario: " + session.getUser() : "Administrador";
         JPanel form = new JPanel();
         form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
@@ -68,10 +92,12 @@ public class FileOperationDialog extends JDialog {
         typeRow = row("Crear un:", typeBox);
         blocksRow = row("Tamaño en bloques (1-500):", blocksField);
         permRow = row("Permiso:", permBox);
+        ownerRow = row("Dueño:", ownerBox);
         newNameRow = row("Nombre nuevo:", newNameField);
         form.add(typeRow);
         form.add(blocksRow);
         form.add(permRow);
+        form.add(ownerRow);
         form.add(newNameRow);
 
         JButton ok = new JButton("Crear proceso de E/S");
@@ -105,6 +131,7 @@ public class FileOperationDialog extends JDialog {
         typeRow.setVisible(create);
         blocksRow.setVisible(create && typeBox.getSelectedItem() == FileType.FILE);
         permRow.setVisible(create);
+        ownerRow.setVisible(create && session.getMode() == UserMode.ADMINISTRATOR);
         newNameRow.setVisible(op == IoOperation.UPDATE);
         pack();
     }
@@ -119,7 +146,8 @@ public class FileOperationDialog extends JDialog {
             }
             UserMode mode = session.getMode();
             String user = mode == UserMode.USER ? session.getUser() : null;
-            String owner = mode == UserMode.USER ? user : "admin";
+            String owner = (mode == UserMode.USER) ? user
+                    : (op == IoOperation.CREATE ? (String) ownerBox.getSelectedItem() : "admin");
 
             FileType type = null;
             int blocks = 0;
