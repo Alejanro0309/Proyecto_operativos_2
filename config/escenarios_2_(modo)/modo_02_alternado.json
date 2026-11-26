@@ -1,0 +1,62 @@
+{
+  "globalConfig": {
+    "cycleDurationMs": 400,
+    "swapSizeBlocks": 100,
+    "initialDiskPolicy": "FIFO"
+  },
+  "computer": {
+    "ramCapacity": 1024,
+    "policy": "FCFS",
+    "quantum": 0
+  },
+  "processes": [
+    {
+      "name": "Lee_config",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 8,
+      "targetPath": "/sistema/config.ini",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_kernel",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 12,
+      "targetPath": "/sistema/kernel.bin",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_cache",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 6,
+      "targetPath": "/tmp/cache.tmp",
+      "operation": "READ"
+    },
+    {
+      "name": "Borra_log",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 10,
+      "targetPath": "/tmp/log.txt",
+      "operation": "DELETE"
+    },
+    {
+      "name": "Lee_tesis",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 14,
+      "targetPath": "/usuarios/user1/tesis.doc",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_foto",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 9,
+      "targetPath": "/usuarios/user1/foto.jpg",
+      "operation": "READ"
+    }
+  ]
+}

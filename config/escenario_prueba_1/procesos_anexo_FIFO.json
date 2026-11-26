@@ -1,0 +1,78 @@
+{
+  "globalConfig": {
+    "cycleDurationMs": 150,
+    "swapSizeBlocks": 100,
+    "initialDiskPolicy": "FIFO"
+  },
+  "computer": {
+    "ramCapacity": 1024,
+    "policy": "FCFS",
+    "quantum": 0
+  },
+  "processes": [
+    {
+      "name": "Espera_50",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/sistema/espera.bin",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_82",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f82.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_17",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f17.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_43",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f43.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_140",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f140.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_24",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f24.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_16",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f16.dat",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_190",
+      "memory": 16,
+      "deadline": 500,
+      "instructions": 2,
+      "targetPath": "/datos/f190.dat",
+      "operation": "READ"
+    }
+  ]
+}
