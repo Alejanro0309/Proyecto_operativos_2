@@ -1,0 +1,30 @@
+{
+  "globalConfig": {
+    "cycleDurationMs": 1000,
+    "swapSizeBlocks": 100,
+    "initialDiskPolicy": "FIFO"
+  },
+  "computer": {
+    "ramCapacity": 1024,
+    "policy": "FCFS",
+    "quantum": 0
+  },
+  "processes": [
+    {
+      "name": "Lee_drivers",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 6,
+      "targetPath": "/sistema/drivers.sys",
+      "operation": "READ"
+    },
+    {
+      "name": "Lee_datos",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 6,
+      "targetPath": "/usuarios/user2/datos.csv",
+      "operation": "READ"
+    }
+  ]
+}

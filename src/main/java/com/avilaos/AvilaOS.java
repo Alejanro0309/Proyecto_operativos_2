@@ -9,9 +9,8 @@ package com.avilaos;
  * @author SebMarval
  */
 public class AvilaOS {
-
     public static void main(String[] args) {
-        javax.swing.SwingUtilities.invokeLater(() -> 
-                new com.avilaos.gui.ConfigFrame().setVisible(true));
+        javax.swing.SwingUtilities.invokeLater(() ->
+                new com.avilaos.gui.StartFrame().setVisible(true));
     }
 }

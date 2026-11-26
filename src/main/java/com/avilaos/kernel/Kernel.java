@@ -2,16 +2,25 @@
  * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
  * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
  */
+
 package com.avilaos.kernel;
 
 import com.avilaos.datastructures.CustomLinkedList;
+import com.avilaos.disk.BlockMap;
+import com.avilaos.disk.DiskCompletionListener;
+import com.avilaos.disk.DiskPort;
+import com.avilaos.disk.DiskRequest;
 import com.avilaos.datastructures.CustomQueue;
 import com.avilaos.enums.BlockReason;
+import com.avilaos.enums.FileType;
+import com.avilaos.enums.IoOperation;
 import com.avilaos.enums.MicroInstruction;
 import com.avilaos.enums.ProcessState;
 import com.avilaos.enums.ProcessType;
 import com.avilaos.enums.SchedulingPolicy;
 import com.avilaos.enums.SemaphoreType;
+import com.avilaos.enums.UserMode;
+import com.avilaos.filesystem.FileSystem;
 import com.avilaos.hardware.CPU;
 import com.avilaos.hardware.IODevice;
 import com.avilaos.hardware.RAM;
@@ -20,6 +29,7 @@ import com.avilaos.scheduling.SchedulerFactory;
 import com.avilaos.scheduling.SchedulingAlgorithm;
 import com.avilaos.sync.BoundedBuffer;
 import java.util.concurrent.Semaphore;
+import com.avilaos.enums.CPUMode;
 
 /**
  * Núcleo de UN computador.
@@ -43,7 +53,7 @@ import java.util.concurrent.Semaphore;
  * @author SebMarval
  * @author aleja
  */
-public class Kernel {
+public class Kernel implements DiskCompletionListener {
 
     private final int computerId;
     private final RAM ram;
@@ -63,6 +73,20 @@ public class Kernel {
     private final Semaphore mailboxLock = new Semaphore(1);
     private WakeUpRouter wakeUpRouter;
 
+    // Proyecto 2: disco y sistema de archivos (null en las pruebas del Proyecto 1)
+    private DiskPort diskPort;
+    private FileSystem fileSystem;
+    private final CustomQueue<PendingDiskDone> diskMailbox = new CustomQueue<>();   // protegido por mailboxLock
+
+    // Proyecto 2: suspensión (modelo de siete estados) y planificador a mediano plazo
+    private BlockMap swapArea;                       // área de intercambio (el mapa de bloques del disco)
+    private final CustomLinkedList<ProcessControlBlock> readySuspendedList = new CustomLinkedList<>();
+    private final CustomLinkedList<ProcessControlBlock> blockedSuspendedList = new CustomLinkedList<>();
+    private int memoryBeingFreed;                    // RAM de los que se están escribiendo al swap
+    private ProcessControlBlock roomTarget;          // a quién se le está haciendo espacio (uno a la vez)
+    private int suspensionCount;
+    private int reactivationCount;
+
     private volatile int networkLatency;   // ciclos que bloquea cada acceso a un buffer remoto
 
     private SchedulingAlgorithm scheduler;
@@ -78,6 +102,10 @@ public class Kernel {
         this.computerId = computerId;
         this.ram = new RAM(ramCapacity);
         this.cpu = new CPU(computerId);
+        this.cpu.setOnModeChange((cycle, newMode) -> {
+        String label = (newMode == CPUMode.USER_MODE) ? "Usuario" : "Sistema operativo";
+        logger.log(cycle, computerId, "Cambio de modo de CPU -> " + label);
+        });
         this.logger = (logger == null) ? EventLogger.SILENT : logger;
         this.scheduler = SchedulerFactory.create(initialPolicy, initialQuantum);
         this.policy = initialPolicy;
@@ -149,6 +177,7 @@ public class Kernel {
         try {
             currentCycle = cycle;
             processWakeUps();           // 0. despertares por semSignal (del ciclo anterior)
+            processDiskCompletions();   // 0b. solicitudes que el disco terminó en el ciclo anterior
             tickDevices();              // 1. DMA (E/S) y red (latencia)
             admitNewProcesses();        // 2. largo plazo
             scheduleIfNeeded();         // 3. corto plazo
@@ -182,6 +211,8 @@ public class Kernel {
                     p.setState(ProcessState.READY);
                     readyQueue.add(p);
                     logger.log(currentCycle, computerId, "P" + p.getId() + " despertado (" + reason + ") -> READY");
+                } else if (blockedSuspendedList.remove(p)) {
+                    toReadySuspended(p, "despertado (" + p.getBlockReason() + ")");
                 }
             }
         } finally {
@@ -205,6 +236,116 @@ public class Kernel {
     /** Un despertar pendiente y el ciclo en que se produjo el semSignal. */
     private record PendingWakeUp(ProcessControlBlock process, int cycle) { }
 
+    // ================================================================ disco (Proyecto 2)
+
+    /** Conecta el disco y el sistema de archivos. El kernel no conoce la clase Disk: solo su puerto. */
+    public void attachDisk(DiskPort port, FileSystem fs) {
+        if (port == null || fs == null) {
+            throw new IllegalArgumentException("El disco y el sistema de archivos son obligatorios");
+        }
+        this.diskPort = port;
+        this.fileSystem = fs;
+        this.swapArea = fs.getBlockMap();
+    }
+
+    /**
+     * El disco terminó una solicitud. Lo llama el HILO DEL DISCO: aquí no se toca
+     * ninguna cola del kernel, solo se deja el aviso en un buzón. El kernel lo
+     * procesa en el paso 0 del ciclo SIGUIENTE (mismo criterio determinista que
+     * los despertares del Proyecto 1).
+     */
+    @Override
+    public void onRequestCompleted(DiskRequest request, int cycle) {
+        mailboxLock.acquireUninterruptibly();
+        try {
+            diskMailbox.enqueue(new PendingDiskDone(request.getProcessId(), request.getOperation(), cycle));
+        } finally {
+            mailboxLock.release();
+        }
+    }
+
+    /** Una solicitud que el disco terminó y el ciclo en que terminó. */
+    private record PendingDiskDone(int processId, IoOperation operation, int cycle) { }
+
+    // 0b ----------------------------------------------------------------
+    /**
+     * Cada solicitud terminada: se aplica el cambio en el sistema de archivos y
+     * el proceso vuelve a READY (o termina, si ya no le quedan instrucciones).
+     * Si el cambio ya no se puede aplicar (p. ej. el archivo se borró mientras
+     * esperaba), el proceso termina y el motivo queda en el log. Si el proceso
+     * ya no está bloqueado (venció su deadline), el aviso se descarta.
+     */
+    private void processDiskCompletions() {
+        mailboxLock.acquireUninterruptibly();
+        try {
+            int pending = diskMailbox.size();
+            for (int k = 0; k < pending; k++) {
+                PendingDiskDone done = diskMailbox.dequeue();
+                if (done.cycle() >= currentCycle) {
+                    diskMailbox.enqueue(done);      // terminó en este mismo ciclo: espera al siguiente
+                    continue;
+                }
+                if (done.operation() == IoOperation.SUSPEND) {
+                    finishSwapOut(done.processId());
+                    continue;
+                }
+                if (done.operation() == IoOperation.REACTIVATE) {
+                    finishSwapIn(done.processId());
+                    continue;
+                }
+                ProcessControlBlock p = removeBlockedById(done.processId(), BlockReason.DISK_IO);
+                boolean suspended = false;
+                if (p == null) {
+                    p = removeById(blockedSuspendedList, done.processId(), BlockReason.DISK_IO);
+                    suspended = (p != null);
+                }
+                if (p == null) {
+                    continue;                       // ya no espera (venció su deadline): se descarta
+                }
+                String error = applyFileOperation(p);
+                if (error != null) {
+                    terminateAnywhere(p, p.getIoOperation() + " " + p.getTargetPath() + " rechazada: " + error);
+                } else if (p.isFinished()) {
+                    terminateAnywhere(p, "completó " + p.getIoOperation() + " " + p.getTargetPath());
+                } else if (suspended) {
+                    toReadySuspended(p, "completó " + p.getIoOperation() + " " + p.getTargetPath() + " en el disco");
+                } else {
+                    p.setState(ProcessState.READY);
+                    readyQueue.add(p);
+                    logger.log(currentCycle, computerId, "P" + p.getId() + " completó " + p.getIoOperation()
+                            + " " + p.getTargetPath() + " en el disco -> READY");
+                }
+            }
+        } finally {
+            mailboxLock.release();
+        }
+    }
+
+    private ProcessControlBlock removeBlockedById(int processId, BlockReason reason) {
+        return removeById(blockedList, processId, reason);
+    }
+
+    /** Saca de 'list' al proceso con ese id (y ese motivo de bloqueo, si no es null). */
+    private static ProcessControlBlock removeById(CustomLinkedList<ProcessControlBlock> list, int processId,
+            BlockReason reason) {
+        for (int i = 0; i < list.getSize(); i++) {
+            ProcessControlBlock p = list.get(i);
+            if (p.getId() == processId && (reason == null || p.getBlockReason() == reason)) {
+                return list.removeAt(i);
+            }
+        }
+        return null;
+    }
+
+    private static ProcessControlBlock findById(CustomLinkedList<ProcessControlBlock> list, int processId) {
+        for (int i = 0; i < list.getSize(); i++) {
+            if (list.get(i).getId() == processId) {
+                return list.get(i);
+            }
+        }
+        return null;
+    }
+
     // 1 -----------------------------------------------------------------
     /**
      * Los dispositivos (componentes de hardware que reaccionan al reloj) avanzan
@@ -224,6 +365,8 @@ public class Kernel {
                 readyQueue.add(p);
                 logger.log(currentCycle, computerId, "P" + p.getId() + " termina " + device.getReason()
                         + " (" + device.getName() + ") -> READY");
+            } else if (blockedSuspendedList.remove(p)) {
+                toReadySuspended(p, "termina " + device.getReason() + " (" + device.getName() + ")");
             }
         }
     }
@@ -234,15 +377,216 @@ public class Kernel {
      * adelanta (evita que un proceso grande sufra inanición).
      */
     private void admitNewProcesses() {
-        ProcessControlBlock next = newQueue.peek();
-        while (next != null && ram.allocate(next.getMemoryRequired())) {
-            newQueue.dequeue();
-            next.setState(ProcessState.READY);
-            readyQueue.add(next);
-            logger.log(currentCycle, computerId, "P" + next.getId() + " admitido -> READY ("
-                    + ram.getUsed() + "/" + ram.getCapacity() + " RAM)");
-            next = newQueue.peek();
+        while (true) {
+            ProcessControlBlock target = nextInLine();
+            if (target == null) {
+                return;
+            }
+            boolean reactivation = target.getState() == ProcessState.READY_SUSPENDED;
+            if (ram.allocate(target.getMemoryRequired())) {
+                if (target == roomTarget) {
+                    roomTarget = null;
+                }
+                if (reactivation) {
+                    startSwapIn(target);
+                } else {
+                    newQueue.remove(target);
+                    target.setState(ProcessState.READY);
+                    readyQueue.add(target);
+                    logger.log(currentCycle, computerId, "P" + target.getId() + " admitido -> READY ("
+                            + ram.getUsed() + "/" + ram.getCapacity() + " RAM)");
+                }
+                continue;
+            }
+            makeRoomFor(target);     // no cabe: el planificador a mediano plazo intenta hacerle espacio
+            return;                  // uno a la vez: nadie adelanta al primero de la fila
         }
+    }
+
+    // ================================================================ planificador a mediano plazo
+
+    /**
+     * El primero de la fila para entrar a la RAM: primero los Listo/Suspendido
+     * (FIFO; ya estaban en el sistema y así no sufren inanición), después el
+     * primero de NUEVOS. Un Listo/Suspendido que todavía se está escribiendo al
+     * swap no puede volver hasta que termine esa escritura.
+     */
+    private ProcessControlBlock nextInLine() {
+        // Uno a la vez: si ya se suspendió a alguien para hacerle espacio a un proceso,
+        // la RAM que se libere es para ÉL, aunque otro se ponga antes en la fila.
+        if (roomTarget != null) {
+            boolean stillWaiting = roomTarget.getState() == ProcessState.NEW
+                    || (roomTarget.getState() == ProcessState.READY_SUSPENDED && roomTarget.getSwapInProgress() == null);
+            if (stillWaiting) {
+                return roomTarget;
+            }
+            roomTarget = null;           // ya entró, o terminó (por ejemplo, venció su deadline)
+        }
+        for (int i = 0; i < readySuspendedList.getSize(); i++) {
+            ProcessControlBlock p = readySuspendedList.get(i);
+            if (p.getSwapInProgress() == null) {
+                return p;
+            }
+        }
+        return newQueue.peek();
+    }
+
+    /**
+     * El primero de la fila no cabe en la RAM. Si suspendiendo procesos
+     * bloqueados se puede liberar lo que le falta, se suspenden (criterio de
+     * selección en chooseVictim) hasta cubrirlo. Si ni suspendiendo a todos
+     * los bloqueados alcanza, no se suspende a nadie: sería costo de disco sin
+     * beneficio. Lo que ya se está liberando (escrituras al swap en curso)
+     * cuenta como liberado, para no suspender de más.
+     */
+    private void makeRoomFor(ProcessControlBlock target) {
+        if (diskPort == null || swapArea == null) {
+            return;                              // sin disco (Proyecto 1): se espera como siempre
+        }
+        int missing = target.getMemoryRequired() - ram.getFree() - memoryBeingFreed;
+        if (missing <= 0) {
+            return;                              // ya se le está haciendo espacio
+        }
+        int suspendable = 0;
+        for (int i = 0; i < blockedList.getSize(); i++) {
+            suspendable += blockedList.get(i).getMemoryRequired();
+        }
+        if (suspendable < missing) {
+            return;
+        }
+        while (missing > 0) {
+            ProcessControlBlock victim = chooseVictim();
+            if (victim == null || !startSwapOut(victim, target)) {
+                return;                          // swap lleno: se espera a que se libere memoria
+            }
+            roomTarget = target;                 // la RAM que se libere es para él
+            missing -= victim.getMemoryRequired();
+        }
+    }
+
+    /**
+     * Criterio de selección: el bloqueado de MENOR prioridad (número mayor).
+     * Empate: el que se bloqueó primero (el más antiguo de la lista). Es el que
+     * menos falta hace en RAM: no puede ejecutar y es el menos importante.
+     */
+    private ProcessControlBlock chooseVictim() {
+        ProcessControlBlock victim = null;
+        for (int i = 0; i < blockedList.getSize(); i++) {
+            ProcessControlBlock p = blockedList.get(i);
+            if (victim == null || p.getPriority() > victim.getPriority()) {
+                victim = p;
+            }
+        }
+        return victim;
+    }
+
+    /** Posición del cabezal para el swap: el último bloque de archivos, la entrada al área de intercambio. */
+    private int swapEntryBlock() {
+        return swapArea.getFileAreaBlocks() - 1;
+    }
+
+    /**
+     * Suspender: el proceso pasa a Bloqueado/Suspendido, se le reservan sus
+     * bloques en el swap y se pide al disco la escritura. Su RAM se libera
+     * cuando el disco termine (finishSwapOut). Devuelve false si el swap está lleno.
+     */
+    private boolean startSwapOut(ProcessControlBlock victim, ProcessControlBlock target) {
+        int memory = victim.getMemoryRequired();
+        int start = swapArea.allocateSwap("P" + victim.getId(), memory);
+        if (start == -1) {
+            logger.log(currentCycle, computerId, "Swap lleno: no se puede suspender a P" + victim.getId()
+                    + " (" + swapArea.freeSwapBlocks() + " bloques libres, necesita " + memory + ")");
+            return false;
+        }
+        blockedList.remove(victim);
+        victim.setState(ProcessState.BLOCKED_SUSPENDED);     // conserva su motivo de bloqueo
+        victim.setSwapStartBlock(start);
+        victim.setSwapInProgress(IoOperation.SUSPEND);
+        blockedSuspendedList.add(victim);
+        memoryBeingFreed += memory;
+        suspensionCount++;
+        diskPort.submitRequest(new DiskRequest(swapEntryBlock(), IoOperation.SUSPEND, victim.getId(), currentCycle, memory));
+        logger.log(currentCycle, computerId, "Se suspende al proceso P" + victim.getId() + " para "
+                + (target.getState() == ProcessState.NEW ? "admitir" : "reactivar") + " a P" + target.getId()
+                + " (" + memory + " bloques al swap desde el " + start + ") -> BLOCKED_SUSPENDED");
+        return true;
+    }
+
+    /** El disco terminó de escribir al swap: recién ahora se libera su RAM. */
+    private void finishSwapOut(int processId) {
+        ProcessControlBlock p = findById(blockedSuspendedList, processId);
+        if (p == null) {
+            p = findById(readySuspendedList, processId);    // su evento ocurrió mientras se escribía
+        }
+        if (p == null || p.getSwapInProgress() != IoOperation.SUSPEND) {
+            return;
+        }
+        p.setSwapInProgress(null);
+        ram.free(p.getMemoryRequired());
+        memoryBeingFreed -= p.getMemoryRequired();
+        logger.log(currentCycle, computerId, "P" + p.getId() + " quedó en el swap: libera " + p.getMemoryRequired()
+                + " de RAM (" + ram.getUsed() + "/" + ram.getCapacity() + ")");
+    }
+
+    /** Reactivar: la RAM ya quedó reservada; se pide al disco que lea su imagen del swap. */
+    private void startSwapIn(ProcessControlBlock p) {
+        p.setSwapInProgress(IoOperation.REACTIVATE);
+        reactivationCount++;
+        diskPort.submitRequest(new DiskRequest(swapEntryBlock(), IoOperation.REACTIVATE, p.getId(), currentCycle,
+                p.getMemoryRequired()));
+        logger.log(currentCycle, computerId, "Se reactiva al proceso P" + p.getId() + " (" + p.getMemoryRequired()
+                + " bloques desde el swap, RAM reservada " + ram.getUsed() + "/" + ram.getCapacity() + ")");
+    }
+
+    /** El disco terminó de leer del swap: se liberan sus bloques y vuelve a READY. */
+    private void finishSwapIn(int processId) {
+        ProcessControlBlock p = findById(readySuspendedList, processId);
+        if (p == null || p.getSwapInProgress() != IoOperation.REACTIVATE) {
+            return;
+        }
+        readySuspendedList.remove(p);
+        swapArea.free(p.getSwapStartBlock());
+        p.setSwapStartBlock(-1);
+        p.setSwapInProgress(null);
+        p.setState(ProcessState.READY);
+        readyQueue.add(p);
+        logger.log(currentCycle, computerId, "P" + p.getId() + " volvió a la RAM -> READY");
+    }
+
+    /** Un Bloqueado/Suspendido cuyo evento ocurre pasa a Listo/Suspendido (sigue en el swap). */
+    private void toReadySuspended(ProcessControlBlock p, String event) {
+        p.setState(ProcessState.READY_SUSPENDED);
+        readySuspendedList.add(p);
+        logger.log(currentCycle, computerId, "P" + p.getId() + " " + event + " -> READY_SUSPENDED");
+    }
+
+    /** ¿Ocupa RAM? En RAM, o suspendiéndose (aún no se libera), o reactivándose (ya reservada). */
+    private static boolean holdsRam(ProcessControlBlock p) {
+        if (p.getState() == ProcessState.NEW) {
+            return false;
+        }
+        return !p.isSuspended() || p.getSwapInProgress() != null;
+    }
+
+    /**
+     * Termina un proceso esté donde esté (dentro o fuera de la RAM): devuelve
+     * su RAM si la tenía, sus bloques de swap y cualquier solicitud pendiente.
+     * El proceso ya debe estar fuera de su lista.
+     */
+    private void terminateAnywhere(ProcessControlBlock p, String reason) {
+        boolean holds = holdsRam(p);
+        if (p.getSwapInProgress() == IoOperation.SUSPEND) {
+            memoryBeingFreed -= p.getMemoryRequired();
+        }
+        if (p.getSwapInProgress() != null && diskPort != null) {
+            diskPort.cancelRequest(p.getId());
+        }
+        if (p.getSwapStartBlock() >= 0) {
+            swapArea.free(p.getSwapStartBlock());
+            p.setSwapStartBlock(-1);
+        }
+        p.setSwapInProgress(null);
+        terminate(p, holds, reason);
     }
 
     // 3 -----------------------------------------------------------------
@@ -273,6 +617,11 @@ public class Kernel {
         ProcessControlBlock running = cpu.getRunning();
         if (running == null) {
             cpu.onTick(currentCycle);           // ciclo ocioso
+            return;
+        }
+        if (running.needsDiskRequest()) {
+            cpu.executeKernelInstruction();     // la solicitud al disco es 1 instrucción en modo SO
+            requestDisk(running);
             return;
         }
         MicroInstruction instruction = running.currentInstruction();
@@ -342,18 +691,117 @@ public class Kernel {
         }
     }
 
+    // ---------------------------------------------------------------- E/S de archivos
+
+    /**
+     * El proceso de E/S genera su solicitud: primero se comprueban permisos y
+     * estado (si falla, el proceso termina sin llegar al disco); si todo está
+     * bien, la solicitud entra a la cola del disco y el proceso queda BLOCKED
+     * por DISK_IO hasta que el disco la atienda.
+     */
+    private void requestDisk(ProcessControlBlock p) {
+        String error = (diskPort == null) ? "no hay disco conectado" : checkFileOperation(p);
+        if (error != null) {
+            cpu.release();
+            terminate(p, true, p.getIoOperation() + " " + p.getTargetPath() + " rechazada: " + error);
+            return;
+        }
+        int block = requestBlock(p);
+        int count = requestBlockCount(p);
+        diskPort.submitRequest(new DiskRequest(block, p.getIoOperation(), p.getId(), currentCycle, count));
+        p.block(BlockReason.DISK_IO);           // sale de la CPU en el paso 5
+        logger.log(currentCycle, computerId, "P" + p.getId() + " solicita " + p.getIoOperation() + " "
+                + p.getTargetPath() + " al disco (bloque " + block + ", " + count + " bloque(s)) -> BLOCKED DISK_IO");
+    }
+
+    /** Los procesos de admin tienen todos los permisos; los demás, los de modo usuario. */
+    private static UserMode modeOf(ProcessControlBlock p) {
+        if (p.getRequesterMode() != null) {
+            return p.getRequesterMode();
+        }
+        return "admin".equals(p.getOwner()) ? UserMode.ADMINISTRATOR : UserMode.USER;
+    }
+
+    private String checkFileOperation(ProcessControlBlock p) {
+        UserMode mode = modeOf(p);
+        String path = p.getTargetPath();
+        return switch (p.getIoOperation()) {
+            case CREATE -> p.getCreateType() == null ? "falta indicar qué se crea"
+                    : fileSystem.checkCreate(path, p.getCreateType(), p.getCreateBlocks(), mode, p.getOwner());
+            case READ -> fileSystem.checkRead(path, mode, p.getOwner());
+            case UPDATE -> fileSystem.checkUpdate(path, p.getNewName(), mode, p.getOwner());
+            case DELETE -> fileSystem.checkDelete(path, mode, p.getOwner());
+            default -> "operación no válida para un proceso de archivos";
+        };
+    }
+
+    /**
+     * Posición del cabezal que necesita la solicitud. Un archivo existente: su
+     * primer bloque. CREATE de archivo: el primer bloque libre, donde empezará.
+     * Los directorios no tienen bloques: sus metadatos se toman en el bloque 0.
+     */
+    private int requestBlock(ProcessControlBlock p) {
+        if (p.getIoOperation() == IoOperation.CREATE) {
+            return p.getCreateType() == FileType.FILE ? Math.max(0, fileSystem.firstFreeBlock()) : 0;
+        }
+        FileSystem.EntryInfo info = fileSystem.info(p.getTargetPath());
+        return (info == null || info.startBlock() < 0) ? 0 : info.startBlock();
+    }
+
+    /** READ transfiere todo el archivo; CREATE escribe sus bloques; UPDATE y DELETE solo metadatos (1). */
+    private int requestBlockCount(ProcessControlBlock p) {
+        if (p.getIoOperation() == IoOperation.CREATE) {
+            return Math.max(1, p.getCreateBlocks());
+        }
+        if (p.getIoOperation() == IoOperation.READ) {
+            FileSystem.EntryInfo info = fileSystem.info(p.getTargetPath());
+            return (info == null) ? 1 : Math.max(1, info.blocks());
+        }
+        return 1;
+    }
+
+    /** Aplica el cambio cuando el disco terminó. Devuelve null o el motivo por el que ya no se pudo. */
+    private String applyFileOperation(ProcessControlBlock p) {
+        String path = p.getTargetPath();
+        String creator = "P" + p.getId();
+        try {
+            switch (p.getIoOperation()) {
+                case CREATE -> {
+                    if (p.getCreateType() == FileType.FILE) {
+                        fileSystem.createFile(path, p.getCreateBlocks(), p.getOwner(), p.getCreatePermission(), creator);
+                    } else {
+                        fileSystem.createDirectory(path, p.getOwner(), p.getCreatePermission(), creator);
+                    }
+                }
+                case READ -> {
+                    if (!fileSystem.exists(path)) {
+                        return "'" + path + "' ya no existe";
+                    }
+                }
+                case UPDATE -> fileSystem.rename(path, p.getNewName());
+                case DELETE -> fileSystem.delete(path);
+                default -> {
+                    return "operación no válida para un proceso de archivos";
+                }
+            }
+            return null;
+        } catch (IllegalArgumentException e) {
+            return e.getMessage();
+        }
+    }
+
     // 5 -----------------------------------------------------------------
     private void handleAfterExecution() {
         ProcessControlBlock running = cpu.getRunning();
         if (running == null) {
             return;
         }
-        if (running.isFinished()) {
+        if (running.getState() == ProcessState.BLOCKED) {
+            cpu.release();                       // se bloqueó en un semáforo, espera la red o el disco
+            blockedList.add(running);            // (primero: un proceso de E/S de 1 instrucción espera al disco)
+        } else if (running.isFinished()) {
             cpu.release();
             terminate(running, true, "terminó sus instrucciones");
-        } else if (running.getState() == ProcessState.BLOCKED) {
-            cpu.release();                       // se bloqueó en un semáforo o espera la red
-            blockedList.add(running);
         } else if (running.needsIO()) {
             cpu.release();
             dma.startService(running, running.getIoDurationCycles());
@@ -372,7 +820,30 @@ public class Kernel {
         }
         expireFromList(readyQueue, true);
         expireFromList(blockedList, true);
+        expireSuspended(readySuspendedList);
+        expireSuspended(blockedSuspendedList);
         expireFromNewQueue();
+    }
+
+    /** El deadline sigue corriendo en el swap (D7). */
+    private void expireSuspended(CustomLinkedList<ProcessControlBlock> list) {
+        int i = 0;
+        while (i < list.getSize()) {
+            ProcessControlBlock p = list.get(i);
+            if (p.tickDeadline()) {
+                list.removeAt(i);
+                deadlineMissedCount++;
+                dma.cancel(p);
+                network.cancel(p);
+                while (diskPort != null && diskPort.cancelRequest(p.getId())) {
+                    // retira todas sus solicitudes (archivo y swap)
+                }
+                releaseSyncResources(p);
+                terminateAnywhere(p, "deadline vencido");
+            } else {
+                i++;
+            }
+        }
     }
 
     private void expireFromList(CustomLinkedList<ProcessControlBlock> list, boolean holdsMemory) {
@@ -405,6 +876,9 @@ public class Kernel {
         deadlineMissedCount++;
         dma.cancel(p);                 // si moría esperando un dispositivo, se retira de él
         network.cancel(p);
+        if (p.getBlockReason() == BlockReason.DISK_IO && diskPort != null) {
+            diskPort.cancelRequest(p.getId());   // su solicitud sale de la cola del disco
+        }
         releaseSyncResources(p);
         terminate(p, holdsMemory, "deadline vencido");
     }
@@ -511,6 +985,7 @@ public class Kernel {
         lock.acquireUninterruptibly();
         try {
             return newQueue.size() + readyQueue.getSize() + blockedList.getSize()
+                    + readySuspendedList.getSize() + blockedSuspendedList.getSize()
                     + (cpu.isIdle() ? 0 : 1);
         } finally {
             lock.release();
@@ -530,6 +1005,28 @@ public class Kernel {
     public Object[] getNewSnapshot()        { return snapshot(newQueue); }
     public Object[] getReadySnapshot()      { return snapshot(readyQueue); }
     public Object[] getBlockedSnapshot()    { return snapshot(blockedList); }
+    public Object[] getReadySuspendedSnapshot()   { return snapshot(readySuspendedList); }
+    public Object[] getBlockedSuspendedSnapshot() { return snapshot(blockedSuspendedList); }
+
+    /** Cantidad de suspensiones (escrituras al swap) decididas por el planificador a mediano plazo. */
+    public int getSuspensionCount() {
+        lock.acquireUninterruptibly();
+        try {
+            return suspensionCount;
+        } finally {
+            lock.release();
+        }
+    }
+
+    /** Cantidad de reactivaciones (lecturas desde el swap). */
+    public int getReactivationCount() {
+        lock.acquireUninterruptibly();
+        try {
+            return reactivationCount;
+        } finally {
+            lock.release();
+        }
+    }
     public Object[] getTerminatedSnapshot() { return snapshot(terminatedList); }
 
     public Object[] getHostedBuffersSnapshot() {

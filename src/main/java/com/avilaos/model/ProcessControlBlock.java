@@ -11,6 +11,10 @@ import com.avilaos.enums.MicroInstruction;
 import com.avilaos.enums.ProcessState;
 import com.avilaos.enums.ProcessType;
 import com.avilaos.sync.BoundedBuffer;
+import com.avilaos.enums.FilePermission;
+import com.avilaos.enums.FileType;
+import com.avilaos.enums.IoOperation;
+import com.avilaos.enums.UserMode;
 
 /**
  * Bloque de control de proceso (PCB).
@@ -54,9 +58,18 @@ public class ProcessControlBlock {
     private int workCycles;            // ciclos de usuario por elemento
     private int itemsProcessed;
     private boolean remoteAccessReady;  // ya pagó la latencia de la operación remota actual
-
+    private IoOperation ioOperation;   // CREATE, READ, UPDATE o DELETE
+    private String targetPath;         // ruta del archivo o directorio
+    private String owner = "admin";
+    private UserMode requesterMode;    // usuario que creó el proceso (permisos)
+    private String newName;            // UPDATE: nombre nuevo
+    private FileType createType;       // CREATE: archivo o directorio
+    private int createBlocks;          // CREATE: tamaño del archivo en bloques
+    private FilePermission createPermission = FilePermission.PUBLIC;
     // ------------------------------------------------ bloqueo temporizado
     private int blockTimer;            // ciclos que faltan para desbloquearse (E/S o latencia)
+    private int swapStartBlock = -1;    // primer bloque de su imagen en el swap (-1 = no está en swap)
+    private IoOperation swapInProgress; // SUSPEND (escribiéndose) o REACTIVATE (leyéndose); null si nada
 
     // ------------------------------------------------ métricas
     private int arrivalCycle = -1;
@@ -183,7 +196,103 @@ public class ProcessControlBlock {
     public int getItemsProcessed() { return itemsProcessed; }
     public int getWorkCycles() { return workCycles; }
 
-    // ================================================================ E/S
+        // ================================================================ E/S de archivos
+
+    /**
+     * Crea un proceso de E/S sobre el sistema de archivos. Su PRIMERA instrucción
+     * es la llamada al sistema que genera la solicitud al disco (modo SO); las
+     * demás se ejecutan cuando el disco termina y el proceso vuelve a la CPU.
+     */
+    public static ProcessControlBlock createFileIoProcess(String name, int computerId, int priority,
+            int memoryRequired, int deadline, int instructions, IoOperation operation, String targetPath) {
+        if (operation == null || !operation.isFileOperation()) {
+            throw new IllegalArgumentException("La operación debe ser CREATE, READ, UPDATE o DELETE");
+        }
+        if (targetPath == null || !targetPath.trim().startsWith("/")) {
+            throw new IllegalArgumentException("La ruta debe empezar por /");
+        }
+        ProcessControlBlock p = new ProcessControlBlock(name, computerId, ProcessType.FILE_IO, priority,
+                memoryRequired, deadline, instructions);
+        p.ioOperation = operation;
+        p.targetPath = targetPath.trim();
+        return p;
+    }
+
+    /** Usuario dueño del proceso (sus permisos se usan al operar sobre el archivo). */
+    public void setOwner(String owner) {
+        if (owner == null || owner.trim().isEmpty()) {
+            throw new IllegalArgumentException("El dueño no puede estar vacío");
+        }
+        this.owner = owner.trim();
+    }
+    
+    /** Modo de usuario con el que se solicitó la operación (null = se deduce del dueño). */
+    public void setRequesterMode(UserMode mode) {
+        this.requesterMode = mode;
+    }
+
+    public UserMode getRequesterMode() { return requesterMode; }
+    
+    /** UPDATE: nombre nuevo del archivo o directorio. */
+    public void setNewName(String newName) {
+        requireOperation(IoOperation.UPDATE);
+        if (newName == null || newName.trim().isEmpty() || newName.contains("/")) {
+            throw new IllegalArgumentException("El nombre nuevo no puede estar vacío ni contener /");
+        }
+        this.newName = newName.trim();
+    }
+
+    /** CREATE: qué se crea, de cuántos bloques (0 si es directorio) y con qué permiso. */
+    public void setCreateSpec(FileType type, int blocks, FilePermission permission) {
+        requireOperation(IoOperation.CREATE);
+        if (type == null || permission == null) {
+            throw new IllegalArgumentException("El tipo y el permiso son obligatorios");
+        }
+        if (type == FileType.FILE && blocks <= 0) {
+            throw new IllegalArgumentException("Un archivo debe tener al menos 1 bloque");
+        }
+        this.createType = type;
+        this.createBlocks = (type == FileType.FILE) ? blocks : 0;
+        this.createPermission = permission;
+    }
+
+    private void requireOperation(IoOperation expected) {
+        if (type != ProcessType.FILE_IO || ioOperation != expected) {
+            throw new IllegalStateException("P" + id + " no es un proceso " + expected);
+        }
+    }
+
+    /** True si la próxima instrucción es la que genera la solicitud al disco (la primera). */
+    public boolean needsDiskRequest() {
+        return type == ProcessType.FILE_IO && getProgramCounter() == 0 && !isFinished();
+    }
+
+    public boolean isFileIoProcess() { return type == ProcessType.FILE_IO; }
+    public IoOperation getIoOperation() { return ioOperation; }
+    public String getTargetPath() { return targetPath; }
+    public String getOwner() { return owner; }
+    public String getNewName() { return newName; }
+    public FileType getCreateType() { return createType; }
+    public int getCreateBlocks() { return createBlocks; }
+    public FilePermission getCreatePermission() { return createPermission; }
+    
+    // ================================================================ intercambio (swap)
+
+    /** Lo usa el planificador a mediano plazo: dónde quedó su imagen en el swap. */
+    public void setSwapStartBlock(int block) { this.swapStartBlock = block; }
+
+    /** Lo usa el planificador a mediano plazo: SUSPEND o REACTIVATE mientras el disco transfiere; null al terminar. */
+    public void setSwapInProgress(IoOperation operation) {
+        if (operation != null && operation != IoOperation.SUSPEND && operation != IoOperation.REACTIVATE) {
+            throw new IllegalArgumentException("Solo SUSPEND o REACTIVATE son transferencias de swap");
+        }
+        this.swapInProgress = operation;
+    }
+
+    public int getSwapStartBlock() { return swapStartBlock; }
+    public IoOperation getSwapInProgress() { return swapInProgress; }
+
+// ================================================================ E/S
 
     /** Configura la E/S de un proceso IO_BOUND (decisión D4). */
     public void configureIO(int everyCycles, int durationCycles) {
@@ -336,12 +445,17 @@ public class ProcessControlBlock {
     public void setState(ProcessState state) {
         this.state = state;
         this.tcb.setState(state);
-        if (state != ProcessState.BLOCKED) {
+        // un bloqueado que se suspende conserva su motivo: sigue esperando el mismo evento
+        if (state != ProcessState.BLOCKED && state != ProcessState.BLOCKED_SUSPENDED) {
             this.blockReason = BlockReason.NONE;
             this.blockTimer = 0;
         }
     }
 
+     public boolean isSuspended() {
+        return state == ProcessState.READY_SUSPENDED || state == ProcessState.BLOCKED_SUSPENDED;
+    }
+     
     /** Bloqueo sin temporizador (semáforos). */
     public void block(BlockReason reason) {
         setState(ProcessState.BLOCKED);

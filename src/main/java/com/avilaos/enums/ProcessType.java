@@ -12,5 +12,6 @@ public enum ProcessType {
     CPU_BOUND,
     IO_BOUND,
     PRODUCER,
-    CONSUMER
+    CONSUMER,
+    FILE_IO
 }

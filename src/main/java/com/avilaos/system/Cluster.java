@@ -5,8 +5,13 @@
 package com.avilaos.system;
 
 import com.avilaos.datastructures.CustomLinkedList;
+import com.avilaos.enums.IoOperation;
 import com.avilaos.enums.SchedulingPolicy;
+import com.avilaos.filesystem.FileOperation;
+import com.avilaos.filesystem.FileOperationRequester;
+import com.avilaos.filesystem.FileSystem;
 import com.avilaos.hardware.ClockListener;
+import com.avilaos.hardware.Disk;
 import com.avilaos.hardware.GlobalClock;
 import com.avilaos.kernel.EventLogger;
 import com.avilaos.kernel.Kernel;
@@ -27,9 +32,12 @@ import java.util.concurrent.Semaphore;
  * clúster lo entrega al buzón del kernel correcto (WakeUpRouter).
  * No hay migración: un proceso vive siempre en el computador donde se creó.
  *
+ * Proyecto 2: también es el FileOperationRequester: la interfaz le pide una operación
+ * sobre un archivo y el clúster crea el proceso de E/S (la interfaz nunca toca el disco).
+ *
  * @author SebMarval
  */
-public final class Cluster {
+public final class Cluster implements FileOperationRequester {
 
     public static final int MIN_COMPUTERS = 2;
 
@@ -39,6 +47,10 @@ public final class Cluster {
     private final CustomLinkedList<BoundedBuffer> buffers = new CustomLinkedList<>();
     private final Semaphore buffersLock = new Semaphore(1);   // la GUI puede crear buffers en ejecución
     private int networkLatency;
+
+    // Proyecto 2: el disco y el sistema de archivos (null en el clúster del Proyecto 1)
+    private final Disk disk;
+    private final FileSystem fileSystem;
 
     /**
      * @param ramCapacities   RAM de cada computador (su longitud = cantidad de computadores)
@@ -59,7 +71,88 @@ public final class Cluster {
             computers[i].getKernel().setWakeUpRouter(this::routeWakeUp);
         }
         setNetworkLatency(networkLatency);
+        this.disk = null;
+        this.fileSystem = null;
         this.clock = new GlobalClock(computers, cycleDurationMs);
+    }
+
+    /**
+     * Sistema del Proyecto 2: UN computador y un disco con su sistema de archivos.
+     *
+     * El reloj tiene dos componentes, cada uno en su hilo: el computador y el
+     * disco. Ninguno empieza el ciclo k+1 hasta que los dos terminaron el k.
+     * El kernel le pide trabajo al disco por su puerto (DiskPort) y el disco
+     * le avisa al kernel cuando termina (DiskCompletionListener).
+     *
+     * @param ramCapacity     RAM del computador
+     * @param policy          política inicial de planificación de CPU
+     * @param quantum         quantum inicial (Round Robin)
+     * @param cycleDurationMs duración del ciclo del reloj en milisegundos
+     * @param disk            el disco, con su política y su cabezal
+     * @param fileSystem      el sistema de archivos que vive en ese disco
+     */
+    public Cluster(int ramCapacity, SchedulingPolicy policy, int quantum, int cycleDurationMs,
+            Disk disk, FileSystem fileSystem, EventLogger logger) {
+        if (disk == null || fileSystem == null) {
+            throw new IllegalArgumentException("El sistema necesita un disco y un sistema de archivos");
+        }
+        this.logger = (logger == null) ? EventLogger.SILENT : logger;
+        this.computers = new Computer[]{new Computer(0, ramCapacity, policy, quantum, this.logger)};
+        Kernel kernel = computers[0].getKernel();
+        kernel.setWakeUpRouter(this::routeWakeUp);
+        kernel.attachDisk(disk, fileSystem);
+        disk.setCompletionListener(kernel);
+        disk.setLogger(this.logger);      // las decisiones del disco salen en el log de eventos
+        setNetworkLatency(0);
+        this.disk = disk;
+        this.fileSystem = fileSystem;
+        this.clock = new GlobalClock(new ClockListener[]{computers[0], disk}, cycleDurationMs);
+    }
+
+    /** El disco, o null en el clúster del Proyecto 1. */
+    public Disk getDisk() {
+        return disk;
+    }
+
+    /** El sistema de archivos, o null en el clúster del Proyecto 1. */
+    public FileSystem getFileSystem() {
+        return fileSystem;
+    }
+
+    // ================================================================ operaciones de archivos (Proyecto 2)
+
+    /**
+     * La interfaz pide una operación (crear, leer, actualizar o eliminar) y aquí se crea el proceso
+     * de E/S que la realiza. El proceso pasa por las colas del computador como cualquier otro.
+     *
+     * @throws IllegalArgumentException si no hay disco o los datos de la operación no son válidos
+     */
+    @Override
+    public void requestFileOperation(FileOperation op) {
+        if (disk == null || fileSystem == null) {
+            throw new IllegalArgumentException("Este sistema no tiene disco");
+        }
+        if (op == null) {
+            throw new IllegalArgumentException("Falta la operación");
+        }
+        String path = op.path();
+        String shortName = path.substring(path.lastIndexOf('/') + 1);
+        String name = op.operation() + "_" + (shortName.isEmpty() ? "raiz" : shortName);
+        if (name.length() > 30) {
+            name = name.substring(0, 30);
+        }
+        int memory = Math.min(16, computers[0].getKernel().getRam().getCapacity());
+        ProcessControlBlock p = ProcessControlBlock.createFileIoProcess(
+                name, 0, 1, memory, 500, 2, op.operation(), path);
+        p.setOwner(op.owner());
+        p.setRequesterMode(op.mode());
+        if (op.operation() == IoOperation.UPDATE) {
+            p.setNewName(op.newName());
+        }
+        if (op.operation() == IoOperation.CREATE) {
+            p.setCreateSpec(op.createType(), op.createBlocks(), op.createPermission());
+        }
+        submit(p);
     }
 
     // ================================================================ red

@@ -7,29 +7,8 @@ package com.avilaos.hardware;
 import com.avilaos.enums.CPUMode;
 import com.avilaos.enums.ProcessState;
 import com.avilaos.model.ProcessControlBlock;
+import java.util.function.BiConsumer;
 
-/**
- * CPU de un computador (un solo núcleo).
- *
- * Responsabilidades:
- *  - Mantener el proceso en ejecución (como máximo uno).
- *  - Ejecutar UNA instrucción por ciclo (supuesto del enunciado).
- *  - Llevar el modo de ejecución (usuario / SO) para la GUI.
- *  - Contar ciclos ocupados y ociosos (utilización de CPU) y el quantum usado.
- *
- * La CPU NO decide a quién ejecutar: eso lo hace el planificador del kernel,
- * que llama a dispatch() y release().
- *
- * Reacciona al reloj (ClockListener): en cada tick, onTick() ejecuta un ciclo
- * de usuario (o un ciclo ocioso). El kernel la invoca en el paso 4 del ciclo,
- * después de planificar, porque el orden importa: primero se decide quién
- * corre y después se ejecuta.
- *
- * Decisión de diseño: el cambio de contexto no consume ciclos (el enunciado no
- * lo pide); despachar y ejecutar ocurren en el mismo ciclo.
- *
- * @author SebMarval
- */
 public class CPU implements ClockListener {
 
     private final int computerId;
@@ -39,12 +18,29 @@ public class CPU implements ClockListener {
     private int busyCycles;
     private int idleCycles;
     private boolean busyLastCycle;
+    private volatile ProcessControlBlock lastExecuted;
+
+    private int currentCycle;
+    private BiConsumer<Integer, CPUMode> onModeChange;
 
     public CPU(int computerId) {
         this.computerId = computerId;
         this.running = null;
-        this.mode = CPUMode.KERNEL_MODE;
+        this.mode = CPUMode.USER_MODE;
         this.quantumUsed = 0;
+    }
+
+    public void setOnModeChange(BiConsumer<Integer, CPUMode> onModeChange) {
+        this.onModeChange = onModeChange;
+    }
+
+    private void changeMode(CPUMode newMode) {
+        if (this.mode != newMode) {
+            this.mode = newMode;
+            if (onModeChange != null) {
+                onModeChange.accept(currentCycle, newMode);
+            }
+        }
     }
 
     /** Carga un proceso READY en la CPU (despacho). */
@@ -55,6 +51,7 @@ public class CPU implements ClockListener {
         if (process.getState() != ProcessState.READY) {
             throw new IllegalStateException("Solo se despacha un proceso READY: " + process);
         }
+        this.currentCycle = cycle;
         process.setState(ProcessState.RUNNING);
         process.markFirstRun(cycle);
         running = process;
@@ -68,6 +65,7 @@ public class CPU implements ClockListener {
     public ProcessControlBlock release() {
         ProcessControlBlock previous = running;
         running = null;
+        changeMode(CPUMode.USER_MODE);
         quantumUsed = 0;
         return previous;
     }
@@ -75,53 +73,53 @@ public class CPU implements ClockListener {
     /** Tick del reloj: ejecuta un ciclo de CPU (instrucción de usuario u ocio). */
     @Override
     public void onTick(int cycle) {
+        this.currentCycle = cycle;
         executeCycle();
     }
 
     /**
      * Ejecuta un ciclo: si hay proceso, ejecuta 1 instrucción de usuario;
-     * si no, el ciclo se cuenta como ocioso (el SO ejecuta su ciclo ocioso).
+     * si no, el ciclo se cuenta como ocioso en modo usuario por defecto.
      */
     public void executeCycle() {
         if (running == null) {
-            mode = CPUMode.KERNEL_MODE;
+            changeMode(CPUMode.USER_MODE);
             idleCycles++;
             busyLastCycle = false;
+            lastExecuted = null;
             return;
         }
-        mode = CPUMode.USER_MODE;
+        changeMode(CPUMode.USER_MODE);
         running.executeInstruction();
         busyCycles++;
         quantumUsed++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     /**
-     * Ejecuta un ciclo en modo SO: una llamada al sistema del proceso actual
-     * (semWait, semSignal, añadir o extraer). Cuenta como 1 instrucción del
-     * proceso: avanza PC/MAR, ocupa la CPU y consume quantum. La semántica de
-     * la operación (bloquear, despertar...) la aplica el kernel.
+     * Ejecuta un ciclo en modo SO: una llamada al sistema del proceso actual.
      */
     public void executeKernelInstruction() {
         if (running == null) {
             throw new IllegalStateException("No hay proceso para ejecutar una llamada al sistema");
         }
-        mode = CPUMode.KERNEL_MODE;
+        changeMode(CPUMode.KERNEL_MODE);
         running.executeInstruction();
         busyCycles++;
         quantumUsed++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     /**
-     * Ciclo de trabajo del SO que NO es una instrucción del proceso (por
-     * ejemplo, enviar una solicitud de red). Ocupa la CPU en modo SO, pero no
-     * avanza el PC ni consume quantum.
+     * Ciclo de trabajo del SO que NO es una instrucción del proceso.
      */
     public void executeKernelOverhead() {
-        mode = CPUMode.KERNEL_MODE;
+        changeMode(CPUMode.KERNEL_MODE);
         busyCycles++;
         busyLastCycle = true;
+        lastExecuted = running;
     }
 
     // ---------------------------------------------------------------- consultas
@@ -132,6 +130,10 @@ public class CPU implements ClockListener {
 
     public ProcessControlBlock getRunning() {
         return running;
+    }
+    
+    public ProcessControlBlock getLastExecuted() {
+        return lastExecuted;
     }
 
     public CPUMode getMode() {
@@ -150,12 +152,10 @@ public class CPU implements ClockListener {
         return idleCycles;
     }
 
-    /** True si la CPU trabajó en el último ciclo (para la gráfica de utilización). */
     public boolean wasBusyLastCycle() {
         return busyLastCycle;
     }
 
-    /** Utilización acumulada en porcentaje: ciclos ocupados / ciclos totales. */
     public double getUtilizationPercent() {
         int total = busyCycles + idleCycles;
         return total == 0 ? 0.0 : (busyCycles * 100.0) / total;

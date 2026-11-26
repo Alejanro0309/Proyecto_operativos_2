@@ -1,81 +1,70 @@
-# ÁvilaOS — Validación final (fases 17 y 18)
+# ÁvilaOS — Validación final (Proyecto 2 y regresión del Proyecto 1)
 
-Fecha: 24/10/2026 · Rama: `develop` · Java 25 / NetBeans 25 (Maven)
+Fecha: 24/11/2026 · Rama: `develop` · Java 25 / NetBeans 25 (Maven)
 
-## 1. Resumen
+## 1. Resumen general
 
-| Tipo de prueba | Clases | Verificaciones | Resultado |
-|---|---|---|---|
-| Unitarias (por componente) | 10 | 196 | ✅ 0 fallidas |
-| Aceptación T01–T10 (sistema integrado, API del `Cluster`) | 1 (`AcceptanceTest`) | 41 | ✅ 10/10 escenarios aprobados |
-| GUI (ejecución real con `config/prueba_completa.json`, ~290 ciclos) | — | revisión visual | ✅ sin excepciones |
-| Auditoría de colecciones de Java | todo `src/` | — | ✅ solo `java.util.concurrent.Semaphore` (exigido) · ⚠️ ver pendiente 1 |
-
-Cómo reproducir: en NetBeans, clic derecho sobre cada clase de `com.avilaos.tests` → *Run File*.
-Las pruebas con hilos (`GlobalClockTest`, `RemoteTest`, `AcceptanceTest`) se ejecutaron 3 veces seguidas con el mismo resultado.
-
-## 2. Pruebas unitarias
-
-| Clase | Componente | OK |
+| Bloque de validación | Clases ejecutadas | Resultado |
 |---|---|---|
-| `DataStructuresTest` | `CustomLinkedList`, `CustomQueue` | 12 |
-| `ProcessModelTest` | PCB/TCB, IDs únicos con hilos, deadline, E/S | 16 |
-| `HardwareTest` | RAM y CPU | 14 |
-| `KernelTest` | colas, admisión por RAM, E/S, deadlines | 17 |
-| `GlobalClockTest` | reloj global, barrera de semáforos, pausa y velocidad | 12 |
-| `SyncTest` | `SimSemaphore` y `BoundedBuffer` (incluye 2 hilos reales) | 21 |
-| `ProducerConsumerTest` | micro-programa, mutex con RR, liberación al vencer, políticas en el kernel | 22 |
-| `RemoteTest` | `Cluster`, latencia, despertares entre computadores, determinismo | 17 |
-| `MetricsTest` | fórmulas (Jain, porcentajes) y métricas sobre simulación real | 36 |
-| `ConfigTest` | JSON ida y vuelta, validaciones, `ClusterFactory` | 29 |
+| Pruebas unitarias e integración del Proyecto 2 | 11 clases (`Disk*`, `BlockMap*`, `FileSystem*`, `FileIoKernel*`, `Suspension*`, `SystemDisk*`, `Project2Config*`, `ProcessModel*`) | ✅ Fallidas: 0 |
+| Regresión completa del Proyecto 1 | 11 clases (`AcceptanceTest` T01–T10 + 10 pruebas unitarias) | ✅ Fallidas: 0 |
+| Experimentos reproducibles P2 (`DiskExperimentsRunner`) | Experimentos A, B y C | ✅ Ejecutados y registrados en `docs/RESULTADOS_EXPERIMENTOS_P2.md` |
+| Interfaz gráfica (GUI en NetBeans) | `StartFrame`, `MainFrame`, `sistema_archivos.json`, `procesos.json`, `procesos_suspension.json` | ✅ Verificada sin excepciones |
+| Auditoría de colecciones prohibidas (`src/`) | Todo el árbol de código fuente | ✅ Solo `java.util.concurrent.Semaphore` |
 
-## 3. Escenarios de aceptación (Plan de Acción)
+Cómo reproducir: en NetBeans, clic derecho sobre cada clase de `com.avilaos.tests` → **Run File (Shift+F6)** (requiere ejecutar desde la raíz del proyecto para las pruebas que leen `config/`).
 
-| ID | Escenario | Evidencia obtenida | Resultado |
-|---|---|---|---|
-| T01 | Ciclo de vida | `NEW → READY → RUNNING → BLOCKED(IO_WAIT) → READY → RUNNING → TERMINATED`; PC = instrucciones; RAM liberada | ✅ |
-| T02 | Memoria insuficiente | RAM 64: B (40) espera en NEW hasta que A (40) termina (A fin ciclo 5, B entra ciclo 6); proceso > RAM total rechazado | ✅ |
-| T03 | FCFS | fin P1=4, P2=7, P3=9: orden de llegada, sin expropiación, aunque P2 tenía mayor prioridad y deadline más cercano | ✅ |
-| T04 | EDF y deadlines | fin por deadline (20 → 40 → 60); expropiación por deadline más cercano; deadline en 0 → terminado, contado como incumplido, RAM liberada | ✅ |
-| T05 | Round Robin | quantum 2 → ráfagas `A2 B2 A2 B2`; cambio a 3 en ejecución → `B1 A3 B3 A3` (B completa su ráfaga de 3) | ✅ |
-| T06 | Prioridades preventivas | igual prioridad no expropia; mayor prioridad expropia en el ciclo en que llega; el expropiado vuelve al final de la cola | ✅ |
-| T07 | Semáforos | consumidor con buffer vacío → `BLOCKED(BUFFER_EMPTY)`, en la cola de `n` (n = −1), otro proceso toma la CPU, despierta tras `semSignal(n)` | ✅ |
-| T08 | Buffer local | 2 productores + 1 consumidor, RR quantum 1: 10/10, nunca 0 > elementos > capacidad, se ejercitaron lleno/vacío/mutex, s=1 n=0 e=2 al final | ✅ |
-| T09 | Buffer remoto | latencia 3: primer acceso completo en el ciclo 4; 15 bloqueos por latencia = 5 operaciones × 3 elementos; productor local 0; 27 vs 65 ciclos | ✅ |
-| T10 | Dos computadoras | hilos reales: cada computadora ejecutó exactamente 1 ciclo por tick, ambos kernels en el ciclo del reloj, ambas empiezan en el ciclo 1, políticas independientes (RR / EDF), buffer compartido 6/6 | ✅ (+ checklist visual) |
+## 2. Pruebas del Proyecto 2
 
-### Comportamientos que conviene saber explicar en la defensa
-- **T01:** si la CPU está libre, un proceso que vuelve de E/S pasa por READY y se despacha en el mismo ciclo.
-- **T05:** al cambiar el quantum en ejecución, el proceso en CPU conserva lo que ya consumió de su ráfaga.
-- **T06:** el proceso expropiado vuelve al **final** de la cola de listos; entre iguales manda el orden de la cola.
-- **T09:** cada una de las 5 llamadas al sistema sobre un buffer remoto paga su latencia (decisión D6).
+| Clase | Alcance verificado | Resultado |
+|---|---|---|
+| `DiskSchedulingTest` | Anexo oficial (`518, 208, 332, 192`) y casos P1–P4 (`644, 236, 337, 183`), fábrica y casos borde | ✅ Fallidas: 0 |
+| `DiskTest` | Reloj manual en `Disk`, órdenes P1–P4, tiempos de espera (`FIFO 37.5`), regla de llegada al ciclo siguiente, multi-bloque, velocidad del cabezal y cambio de política en caliente | ✅ Fallidas: 0 |
+| `BlockMapTest` | Asignación encadenada, liberación y reutilización de huecos, fragmentación, área de swap independiente y disco oficial de 200 bloques | ✅ Fallidas: 0 |
+| `FileSystemTest` | Jerarquía, `CREATE`/`READ`/`UPDATE`/`DELETE`, borrado recursivo de directorios, renombrado y rotulado de bloques, permisos `ADMINISTRATOR` vs `USER` y manejo de errores | ✅ Fallidas: 0 |
+| `FileSystemTreeModelTest` | Modelo propio del `JTree` sin `DefaultMutableTreeNode`, jerarquía, listeners y firma de cambios | ✅ Fallidas: 0 |
+| `FileIoKernelTest` | Procesos `FILE_IO` conectados al kernel: caso P1 FIFO (`95 180 34 119 11 123 62 64`), CPU útil durante espera de disco, rechazo por permisos antes del disco, `CREATE` con disco lleno/libre y cancelación por deadline | ✅ Fallidas: 0 |
+| `SuspensionTest` | Decisiones D1–D7, invariantes de RAM/swap/colas en cada ciclo, carga de estrés (30 procesos) y determinismo con hilos reales (5 corridas) | ✅ Fallidas: 0 |
+| `SystemDiskTest` | Integración con hilos reales (`Computer-0` y `Disk`, verificados con `Thread.enumerate`), pausa/reanudación del disco y determinismo exacto frente a ticks manuales | ✅ Fallidas: 0 |
+| `DiskMetricsTest` | Desplazamiento total, solicitudes atendidas por política, espera promedio, utilización e historial circular para la gráfica con cambio de política | ✅ Fallidas: 0 |
+| `Project2ConfigTest` | Carga y validación de ambos JSON, guardado y recarga ida y vuelta con archivos fragmentados (`chain`), `quantum: 0` fuera de RR, `C-SCAN`/`C_SCAN`, rechazo de archivos inválidos e integración real con `config/escenarios_2/` | ✅ Fallidas: 0 |
+| `ProcessModelTest` | PCB/TCB, IDs únicos concurrentes, deadlines, `IO_BOUND` y atributos/validaciones de `FILE_IO` | ✅ Fallidas: 0 |
 
-## 4. Requisitos de la GUI → dónde se ven
+## 3. Regresión del Proyecto 1
 
-| Requisito del enunciado (secciones 6 y 7) | Dónde está en ÁvilaOS |
+| Clase | Componente | Resultado |
+|---|---|---|
+| `AcceptanceTest` | Escenarios integrados T01–T10 sobre `Cluster` | ✅ 10/10 aprobados (Fallidas: 0) |
+| `DataStructuresTest` | `CustomLinkedList`, `CustomQueue` | ✅ Fallidas: 0 |
+| `HardwareTest` | `RAM`, `CPU`, `IODevice` (`ClockListener`) | ✅ Fallidas: 0 |
+| `KernelTest` | Colas, admisión por RAM, DMA y deadlines | ✅ Fallidas: 0 |
+| `SchedulingTest` | Prueba automatizada (sin `Scanner`) de FCFS, RR, EDF y Prioridades | ✅ Fallidas: 0 |
+| `GlobalClockTest` | Reloj global, barrera de semáforos, pausa y velocidad | ✅ Fallidas: 0 |
+| `SyncTest` | `SimSemaphore` y `BoundedBuffer` (incluye concurrencia con 2 hilos) | ✅ Fallidas: 0 |
+| `ProducerConsumerTest` | Micro-programa, contención en mutex con RR, liberación al vencer deadline | ✅ Fallidas: 0 |
+| `RemoteTest` | `Cluster`, latencia de red, despertares entre computadores y determinismo | ✅ Fallidas: 0 |
+| `MetricsTest` | Fórmulas (Jain, porcentajes) y colector de métricas | ✅ Fallidas: 0 |
+| `ConfigTest` | Persistencia y validación JSON del Proyecto 1 (`ClusterFactory`) | ✅ Fallidas: 0 |
+
+## 4. Auditoría de restricciones técnicas
+
+- **Colecciones prohibidas de Java:** búsqueda global sobre `src/` de `java.util.`, `ArrayList`, `Queue`, `Stack`, `Vector`, `HashMap` y `List<`. Resultado: únicamente `java.util.concurrent.Semaphore` (exigido por el enunciado). Se eliminaron `CustomStack`/`StackNode`, `SchedulingTest` dejó de usar `java.util.Scanner` y `SystemDiskTest` reemplazó `Thread.getAllStackTraces().keySet()` por `Thread.enumerate(Thread[])`.
+- **Entorno:** compilación y ejecución verificadas con Java 25 en NetBeans 25 (`pom.xml` con `maven.compiler.release = 25`).
+- **Desacoplamiento de la GUI:** las ventanas y paneles únicamente leen copias inmutables (`snapshot()`) y delegan acciones mediante `Cluster`, `Disk.setPolicy(...)` y `FileOperationRequester`.
+
+## 5. Requisitos de la GUI del Proyecto 2 → dónde se observan
+
+| Requisito del enunciado | Ubicación en ÁvilaOS |
 |---|---|
-| Proceso en ejecución, PC, prioridad y deadline | Pestaña *Computador N* → recuadro "CPU – proceso en ejecución" |
-| SO o programa de usuario | Mismo recuadro → campo **Modo** |
-| Colas de nuevos, listos, bloqueados (con motivo) y terminados | Pestaña *Computador N* → 4 tablas; Bloqueados con columna **Motivo** |
-| Elementos del PCB en colas y CPU | Columnas de las tablas + recuadro CPU (ID, nombre, tipo, estado, prioridad, memoria, deadline, restante, PC, MAR, TCB, computador) |
-| Ocupación de memoria usada/libre | Pestaña *Computador N* → barra "Memoria principal (RAM)" |
-| Política en uso y selector | Pestaña *Computador N* → "Planificación" (política + quantum + Aplicar) |
-| Ciclo de reloj global | Panel inferior → "Ciclo actual" |
-| Estado de cada buffer (elementos, capacidad, s/n/e, bloqueados) | Panel inferior → tabla "Buffers" |
-| Log de eventos | Panel inferior → "Log de eventos" |
-| En ejecución: política, duración del ciclo, quantum, nuevos procesos y buffers | Selector por computador · "Duración del ciclo (ms) + Aplicar" · botones **Crear proceso…** / **Crear buffer…** |
-| Parámetros a archivo (ciclo, nº de computadores y RAM, política y quantum, latencia, procesos y buffers) | Ventana inicial de configuración → **Guardar JSON / Cargar JSON** |
-| Métricas por computador y globales | Pestaña *Métricas* |
-| Gráfica de utilización de CPU en el tiempo | Pestaña *Gráfica de utilización* (JFreeChart, una serie por computador) |
-| Validación de tipo y rango en todos los campos | `ProcessDialog`, `BufferDialog`, `ConfigFrame`, `ComputerPanel`, `GlobalPanel` (mensaje de error, no se crea nada) |
-
-El diseño difiere del anexo del enunciado a propósito: el propio anexo aclara que no hay que seguir su estilo.
-
-## 5. Pendientes antes de la entrega
-
-1. ⚠️ `tests/SchedulingTest` usa `java.util.Scanner` (menú interactivo; falla sin teclado). Es el único uso de
-   `java.util` fuera de `Semaphore`. Convertirlo en prueba automática o eliminarlo (ya cubierto por T03–T06).
-2. `CustomStack` / `StackNode` no se usan: eliminarlos.
-3. Recomendado: pestaña **Resumen** con ambas computadoras visibles a la vez (proceso en CPU, PC, modo,
-   política, RAM y tamaño de colas), para la demostración de T10.
-4. Unir `develop` → `main` con un único PR el día de la entrega.
+| Carga obligatoria de los dos JSON antes de iniciar | `StartFrame` (el botón **Iniciar simulación** se habilita solo tras validar ambos JSON) |
+| Estructura jerárquica de directorios/archivos e información del elemento | Pestaña **Archivos** → `FileSystemPanel` (`JTree` con `FileSystemTreeModel` propio + panel de detalles) |
+| Tabla de asignación con colores actualizados en tiempo real | Pestaña **Archivos** → `AllocationTablePanel` (`JTable` sincronizada con `FileColors`) |
+| Mapa de bloques del disco, área de swap, cabezal y dirección | Pestaña **Disco** → `DiskPanel` (mapa de bloques con tooltips + franja de swap + borde rojo del cabezal) |
+| Cola de E/S del disco con operación y selector de política en ejecución | Pestaña **Disco** → `DiskQueuePanel` (`FIFO`, `SSTF`, `SCAN`, `C_SCAN` en caliente) |
+| Colas de 7 estados (`Listo/Suspendido` y `Bloqueado/Suspendido` con motivo) | Pestaña **Computador 0** → `ComputerPanel` (6 tablas de colas + CPU + RAM + política de CPU) |
+| Operaciones CRUD solo por procesos de E/S y selector de modo de usuario | Panel global (`GlobalPanel`) → **Operación de archivo...** (`FileOperationDialog`) y `ModePanel` (`ADMINISTRATOR` / `USER`) |
+| Guardar estado del sistema de archivos en JSON | Panel global (`GlobalPanel`) → **Guardar sistema de archivos...** (`FileSystemLoader.save`) |
+| Log de eventos con decisiones del disco y del planificador a mediano plazo | Panel global (`GlobalPanel`) → **Log de eventos** (`GuiEventLogger`) |
+| Métricas del disco y de suspensión | Pestaña **Métricas del disco** → `DiskMetricsPanel` |
+| Gráfica de desplazamiento acumulado del cabezal en el tiempo | Pestaña **Gráfica del cabezal** → `HeadDisplacementChartPanel` (JFreeChart, una serie por política) |
+| Métricas y gráfica de CPU del Proyecto 1 | Pestañas **Métricas** y **Gráfica de utilización** |

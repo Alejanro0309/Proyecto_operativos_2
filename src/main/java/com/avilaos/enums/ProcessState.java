@@ -13,5 +13,7 @@ public enum ProcessState {
     READY,
     RUNNING,
     BLOCKED,
+    READY_SUSPENDED,     // listo, pero su imagen está en el área de swap (fuera de la RAM)
+    BLOCKED_SUSPENDED,   // bloqueado y además en el área de swap
     TERMINATED
 }
