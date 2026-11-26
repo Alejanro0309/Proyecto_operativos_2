@@ -1,0 +1,84 @@
+{
+  "diskConfig": {
+    "totalBlocks": 200,
+    "initialHead": 50
+  },
+  "fileSystem": [
+    {
+      "path": "/sistema",
+      "type": "DIRECTORY",
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos",
+      "type": "DIRECTORY",
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/sistema/espera.bin",
+      "type": "FILE",
+      "startBlock": 50,
+      "blocks": 30,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f16.dat",
+      "type": "FILE",
+      "startBlock": 16,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f17.dat",
+      "type": "FILE",
+      "startBlock": 17,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f24.dat",
+      "type": "FILE",
+      "startBlock": 24,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f43.dat",
+      "type": "FILE",
+      "startBlock": 43,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f82.dat",
+      "type": "FILE",
+      "startBlock": 82,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f140.dat",
+      "type": "FILE",
+      "startBlock": 140,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/datos/f190.dat",
+      "type": "FILE",
+      "startBlock": 190,
+      "blocks": 1,
+      "owner": "admin",
+      "permissions": "public"
+    }
+  ]
+}

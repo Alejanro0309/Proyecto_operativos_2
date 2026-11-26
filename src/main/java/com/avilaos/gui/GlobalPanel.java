@@ -2,6 +2,8 @@ package com.avilaos.gui;
 
 import com.avilaos.config.FileSystemLoader;
 import com.avilaos.disk.DiskStatus;
+import com.avilaos.enums.UserMode;
+import com.avilaos.filesystem.FileOperation;
 import com.avilaos.model.ProcessControlBlock;
 import com.avilaos.sync.BoundedBuffer;
 import com.avilaos.sync.BufferStatus;
@@ -24,16 +26,16 @@ import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
-import com.avilaos.enums.UserMode;
 
 // Parte global de la ventana: control del reloj, velocidad, alta de procesos y buffers,
 // tabla de buffers y log de eventos.
 //
 // En el Proyecto 2 (el clúster tiene sistema de archivos): el botón de procesos abre el diálogo de
 // operaciones sobre archivos, aparece el selector de modo (administrador / usuario), el botón para
-// guardar el sistema de archivos en JSON, y se ocultan los buffers y los procesos aleatorios.
-// Además, la simulación se pausa sola cuando ya no queda ningún proceso activo ni solicitud en el
-// disco (así las métricas y la gráfica no se distorsionan con ciclos vacíos); "Reanudar" la continúa.
+// guardar el sistema de archivos en JSON y los botones de pruebas (operaciones y directorios al azar,
+// siempre válidos para el modo activo). Se ocultan los buffers y los procesos aleatorios del Proyecto 1.
+// La simulación se pausa sola cuando ya no queda ningún proceso activo ni solicitud en el disco (así las
+// métricas y la gráfica no se distorsionan con ciclos vacíos) y se reanuda sola al crear una operación.
 //
 // Solo ENVÍA órdenes al Cluster y LEE copias seguras. No decide nada del sistema.
 public class GlobalPanel extends JPanel {
@@ -49,6 +51,7 @@ public class GlobalPanel extends JPanel {
     private final Cluster cluster;
     private final boolean p2;
     private ClockState state = ClockState.SIN_INICIAR;
+    private boolean autoPaused;          // la pausa la puso el sistema (sin trabajo), no el usuario
 
     private final JLabel cycleLabel = new JLabel("Ciclo actual: 0");
     private final JLabel stateLabel = new JLabel();
@@ -64,11 +67,12 @@ public class GlobalPanel extends JPanel {
     private final JButton bufferButton = new JButton("Crear buffer...");
     private final JButton randomOneButton = new JButton("Proceso aleatorio");
     private final JButton randomFiveButton = new JButton("5 aleatorios");
+    private final JButton randomDirButton = new JButton("Directorio aleatorio");
     private final JButton saveFsButton = new JButton("Guardar sistema de archivos...");
-    private final JButton cpuProcessButton = new JButton("Crear proceso CPU/E/S...");
 
-    // Proyecto 2: selector de modo de usuario (null en el Proyecto 1)
+    // Proyecto 2: selector de modo de usuario y generador de operaciones al azar (null en el Proyecto 1)
     private ModePanel modePanel;
+    private RandomFileOperationFactory randomFactory;
 
     private final DefaultTableModel buffersModel = new DefaultTableModel(new Object[0][0], BUFFER_COLUMNS) {
         @Override
@@ -84,14 +88,17 @@ public class GlobalPanel extends JPanel {
 
         startButton.addActionListener(e -> {
             cluster.start();
+            autoPaused = false;
             setState(ClockState.EN_EJECUCION);
         });
         pauseButton.addActionListener(e -> {
             cluster.pause();
+            autoPaused = false;
             setState(ClockState.EN_PAUSA);
         });
         resumeButton.addActionListener(e -> {
             cluster.resume();
+            autoPaused = false;
             setState(ClockState.EN_EJECUCION);
         });
         stopButton.addActionListener(e -> confirmStop());
@@ -101,28 +108,30 @@ public class GlobalPanel extends JPanel {
         speedButton.addActionListener(e -> applySpeed());
         if (p2) {
             modePanel = new ModePanel(cluster.getFileSystem());
+            randomFactory = new RandomFileOperationFactory(cluster.getFileSystem(), modePanel);
             processButton.setText("Operación de archivo...");
-            processButton.addActionListener(e -> new FileOperationDialog(
-                    SwingUtilities.getWindowAncestor(this), cluster, cluster.getFileSystem(), modePanel)
-                    .setVisible(true));
-            saveFsButton.addActionListener(e -> saveFileSystem());
-            cpuProcessButton.addActionListener(e -> {
-                if (modePanel.getMode() == UserMode.USER) {
-                    JOptionPane.showMessageDialog(this,
-                            "Operación rechazada: en modo usuario solo se pueden crear procesos de E/S sobre archivos propios.",
-                            "Operación no permitida", JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-                new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true);
+            processButton.addActionListener(e -> {
+                new FileOperationDialog(SwingUtilities.getWindowAncestor(this), cluster,
+                        cluster.getFileSystem(), modePanel).setVisible(true);
+                resumeIfAutoPaused();
             });
+            saveFsButton.addActionListener(e -> saveFileSystem());
+            randomOneButton.setText("Operación aleatoria");
+            randomFiveButton.setText("5 operaciones aleatorias");
+            randomOneButton.setToolTipText("Crea un proceso de E/S al azar, válido para el modo y usuario activos");
+            randomFiveButton.setToolTipText("Crea 5 procesos de E/S al azar, válidos para el modo y usuario activos");
+            randomDirButton.setToolTipText("Crea un directorio al azar (solo el administrador crea directorios)");
+            randomOneButton.addActionListener(e -> addRandomFileOperations(1));
+            randomFiveButton.addActionListener(e -> addRandomFileOperations(5));
+            randomDirButton.addActionListener(e -> addRandomDirectory());
         } else {
             processButton.addActionListener(e ->
                     new ProcessDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
+            randomOneButton.addActionListener(e -> addRandomProcesses(1));
+            randomFiveButton.addActionListener(e -> addRandomProcesses(5));
         }
         bufferButton.addActionListener(e ->
                 new BufferDialog(SwingUtilities.getWindowAncestor(this), cluster).setVisible(true));
-        randomOneButton.addActionListener(e -> addRandomProcesses(1));
-        randomFiveButton.addActionListener(e -> addRandomProcesses(5));
 
         JPanel clockRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         clockRow.add(cycleLabel);
@@ -142,7 +151,6 @@ public class GlobalPanel extends JPanel {
         JPanel createRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         createRow.add(processButton);
         if (p2) {
-            createRow.add(cpuProcessButton);
             createRow.add(modePanel);
             createRow.add(saveFsButton);
         } else {
@@ -156,6 +164,14 @@ public class GlobalPanel extends JPanel {
         controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
         controls.add(clockRow);
         controls.add(createRow);
+        if (p2) {
+            JPanel testRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            testRow.add(new JLabel("Pruebas:"));
+            testRow.add(randomOneButton);
+            testRow.add(randomFiveButton);
+            testRow.add(randomDirButton);
+            controls.add(testRow);
+        }
 
         JScrollPane logScroll = new JScrollPane(logArea);
         logScroll.setBorder(BorderFactory.createTitledBorder("Log de eventos"));
@@ -179,6 +195,43 @@ public class GlobalPanel extends JPanel {
     }
 
     // ---------------------------------------------------------------- órdenes
+
+    // Operaciones al azar: el generador ya comprobó que el modo activo puede hacerlas
+    private void addRandomFileOperations(int count) {
+        FileOperation[] operations = randomFactory.generateFileOperations(count);
+        if (operations.length == 0) {
+            logNothingToGenerate();
+            return;
+        }
+        submitAll(operations);
+    }
+
+    // Directorio al azar: solo el administrador crea directorios
+    private void addRandomDirectory() {
+        FileOperation operation = randomFactory.generateDirectory();
+        if (operation == null) {
+            logNothingToGenerate();
+            return;
+        }
+        submitAll(new FileOperation[]{operation});
+    }
+
+    private void submitAll(FileOperation[] operations) {
+        for (int i = 0; i < operations.length; i++) {
+            try {
+                cluster.requestFileOperation(operations[i]);
+            } catch (IllegalArgumentException ex) {
+                error(ex.getMessage());
+                return;
+            }
+        }
+        resumeIfAutoPaused();
+    }
+
+    private void logNothingToGenerate() {
+        cluster.getLogger().log(cluster.getCurrentCycle(), 0,
+                "No hay ninguna operación aleatoria posible para el modo y usuario activos");
+    }
 
     // Guarda el estado actual del disco (directorios, archivos, bloques de cada uno, dueños, permisos y
     // posición del cabezal) en un JSON que se puede cargar en otra ejecución. Es solo lectura del sistema.
@@ -279,8 +332,8 @@ public class GlobalPanel extends JPanel {
         bufferButton.setEnabled(canCreate);
         randomOneButton.setEnabled(canCreate);
         randomFiveButton.setEnabled(canCreate);
-        cpuProcessButton.setEnabled(canCreate);
-        stateLabel.setText("  Estado: " + state.name().replace('_', ' ').toLowerCase() + "  ");
+        stateLabel.setText("  Estado: " + state.name().replace('_', ' ').toLowerCase()
+                + (state == ClockState.EN_PAUSA && autoPaused ? " (sin trabajo pendiente)" : "") + "  ");
     }
 
     private void error(String message) {
@@ -293,6 +346,8 @@ public class GlobalPanel extends JPanel {
         cycleLabel.setText("Ciclo actual: " + cluster.getCurrentCycle());
         latencyLabel.setText("  Latencia de red: " + cluster.getNetworkLatency() + " ciclos  ");
         if (p2) {
+            // en modo usuario no se crean directorios: el botón se apaga en vez de mostrar un rechazo
+            randomDirButton.setEnabled(state != ClockState.DETENIDA && modePanel.getMode() == UserMode.ADMINISTRATOR);
             pauseIfNothingLeftToDo();
             return;                  // Proyecto 2: no hay tabla de buffers que refrescar
         }
@@ -311,7 +366,7 @@ public class GlobalPanel extends JPanel {
     }
 
     // Proyecto 2: cuando no queda ningún proceso vivo (ni suspendido) y el disco está libre y sin cola,
-    // el reloj se pausa solo. Una operación nueva se crea igual; "Reanudar" la procesa.
+    // el reloj se pausa solo. Al crear una operación nueva se reanuda solo (resumeIfAutoPaused).
     private void pauseIfNothingLeftToDo() {
         if (state != ClockState.EN_EJECUCION || cluster.getCurrentCycle() <= 0) {
             return;
@@ -321,9 +376,22 @@ public class GlobalPanel extends JPanel {
                 && !disk.busy() && disk.queue().length == 0;
         if (idle) {
             cluster.pause();
+            autoPaused = true;
             setState(ClockState.EN_PAUSA);
             cluster.getLogger().log(cluster.getCurrentCycle(), 0,
                     "Simulación en pausa: no quedan procesos activos ni solicitudes en el disco");
+        }
+    }
+
+    // Si el sistema se pausó solo por falta de trabajo y ahora hay un proceso nuevo, continúa solo.
+    // Una pausa puesta por el usuario no se toca.
+    private void resumeIfAutoPaused() {
+        if (autoPaused && state == ClockState.EN_PAUSA
+                && cluster.getComputer(0).getKernel().getActiveProcessCount() > 0) {
+            autoPaused = false;
+            cluster.resume();
+            setState(ClockState.EN_EJECUCION);
+            cluster.getLogger().log(cluster.getCurrentCycle(), 0, "Simulación reanudada: hay trabajo nuevo");
         }
     }
 

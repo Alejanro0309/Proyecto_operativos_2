@@ -29,6 +29,7 @@ import com.avilaos.scheduling.SchedulerFactory;
 import com.avilaos.scheduling.SchedulingAlgorithm;
 import com.avilaos.sync.BoundedBuffer;
 import java.util.concurrent.Semaphore;
+import com.avilaos.enums.CPUMode;
 
 /**
  * Núcleo de UN computador.
@@ -101,6 +102,10 @@ public class Kernel implements DiskCompletionListener {
         this.computerId = computerId;
         this.ram = new RAM(ramCapacity);
         this.cpu = new CPU(computerId);
+        this.cpu.setOnModeChange((cycle, newMode) -> {
+        String label = (newMode == CPUMode.USER_MODE) ? "Usuario" : "Sistema operativo";
+        logger.log(cycle, computerId, "Cambio de modo de CPU -> " + label);
+        });
         this.logger = (logger == null) ? EventLogger.SILENT : logger;
         this.scheduler = SchedulerFactory.create(initialPolicy, initialQuantum);
         this.policy = initialPolicy;

@@ -1,0 +1,22 @@
+{
+  "globalConfig": {
+    "cycleDurationMs": 500,
+    "swapSizeBlocks": 100,
+    "initialDiskPolicy": "FIFO"
+  },
+  "computer": {
+    "ramCapacity": 1024,
+    "policy": "FCFS",
+    "quantum": 0
+  },
+  "processes": [
+    {
+      "name": "Lee_config",
+      "memory": 16,
+      "deadline": 3000,
+      "instructions": 10,
+      "targetPath": "/sistema/config.ini",
+      "operation": "READ"
+    }
+  ]
+}
