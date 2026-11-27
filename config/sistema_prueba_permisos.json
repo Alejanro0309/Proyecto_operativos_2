@@ -1,0 +1,56 @@
+{
+  "diskConfig": {
+    "totalBlocks": 200,
+    "initialHead": 50
+  },
+  "fileSystem": [
+    {
+      "path": "/sistema",
+      "type": "DIRECTORY",
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/usuarios",
+      "type": "DIRECTORY",
+      "owner": "admin",
+      "permissions": "public"
+    },
+    {
+      "path": "/usuarios/user1",
+      "type": "DIRECTORY",
+      "owner": "user1",
+      "permissions": "public"
+    },
+    {
+      "path": "/usuarios/user2",
+      "type": "DIRECTORY",
+      "owner": "user2",
+      "permissions": "public"
+    },
+    {
+      "path": "/usuarios/user1/notas.txt",
+      "type": "FILE",
+      "startBlock": 10,
+      "blocks": 4,
+      "owner": "user1",
+      "permissions": "private"
+    },
+    {
+      "path": "/usuarios/user1/publico_u1.txt",
+      "type": "FILE",
+      "startBlock": 14,
+      "blocks": 3,
+      "owner": "user1",
+      "permissions": "public"
+    },
+    {
+      "path": "/usuarios/user2/data.csv",
+      "type": "FILE",
+      "startBlock": 20,
+      "blocks": 5,
+      "owner": "user2",
+      "permissions": "private"
+    }
+  ]
+}

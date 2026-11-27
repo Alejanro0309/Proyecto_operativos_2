@@ -38,14 +38,18 @@ public class ModePanel extends JPanel implements UserSession {
         return (String) userBox.getSelectedItem();
     }
 
-    // Dueños distintos del árbol, sin 'admin'; si no hay ninguno se ofrece user1 para poder probar.
     private static String[] ownersOf(FileSystem fileSystem) {
         FileSystem.EntryInfo[] entries = fileSystem.snapshot();
-        String[] found = new String[entries.length];
+        String[] found = new String[entries.length + 2];
         int count = 0;
+
+        // Garantizamos siempre user1 y user2 disponibles en el selector
+        found[count++] = "user1";
+        found[count++] = "user2";
+
         for (int i = 0; i < entries.length; i++) {
             String owner = entries[i].owner();
-            if (owner.equals("admin")) {
+            if (owner == null || owner.equals("admin")) {
                 continue;
             }
             boolean known = false;
@@ -56,9 +60,7 @@ public class ModePanel extends JPanel implements UserSession {
                 found[count++] = owner;
             }
         }
-        if (count == 0) {
-            return new String[]{"user1"};
-        }
+
         String[] result = new String[count];
         for (int i = 0; i < count; i++) {
             result[i] = found[i];
